@@ -7,3 +7,4 @@ dcu/
 __history/
 src/terminal/*.res
 tests/out*/
+tests/buildsample/out/

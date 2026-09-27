@@ -73,7 +73,7 @@ uses
 
 const
   SERVER_NAME = 'claude-code-delphi';
-  SERVER_VERSION = '0.1.0';
+  SERVER_VERSION = '0.2.0';
   DEFAULT_PROTOCOL = '2025-03-26';
 
 function ClaudeIdeLockDir: string;
@@ -191,6 +191,26 @@ begin
     Schema([TJSONPair.Create('tab_name', Prop('string', 'Tab name'))], ['tab_name'])));
   Result.Add(Tool('closeAllDiffTabs', 'Close all diff windows opened by Claude',
     Schema([], [])));
+  Result.Add(Tool('buildProject',
+    'Compile a Delphi project with MSBuild using its .dproj settings (the active IDE configuration and ' +
+    'platform by default) and return the compiler errors, warnings and hints. Files are built from disk: ' +
+    'unsaved editor changes are listed in unsavedFiles unless saveModified is true. ' +
+    'The messages also appear in the IDE Messages window.',
+    Schema([
+      TJSONPair.Create('project', Prop('string', 'Project file path or name; defaults to the active project')),
+      TJSONPair.Create('target', Prop('string', '"make" (default, incremental), "build" (full rebuild) or "clean"')),
+      TJSONPair.Create('config', Prop('string', 'Build configuration, e.g. Debug or Release; defaults to the active one')),
+      TJSONPair.Create('platform', Prop('string', 'Target platform, e.g. Win32 or Win64; defaults to the active one')),
+      TJSONPair.Create('saveModified', Prop('boolean', 'Save modified editor buffers before building (default false)')),
+      TJSONPair.Create('includeHints', Prop('boolean', 'Include compiler hints in the result (default true)')),
+      TJSONPair.Create('timeoutSec', Prop('number', 'Build timeout in seconds (default 600)'))],
+      [])));
+  Result.Add(Tool('getProjectInfo',
+    'Get the Delphi project group and project settings: projects, active configuration and platform, ' +
+    'framework (VCL/FMX), output file, defines, search paths, namespaces and the units/forms of the project',
+    Schema([
+      TJSONPair.Create('project', Prop('string', 'Project file path or name; defaults to the active project'))],
+      [])));
 end;
 
 { TMcpServer }

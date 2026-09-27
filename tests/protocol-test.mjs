@@ -74,7 +74,7 @@ c.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 c.send({ jsonrpc: '2.0', id: 'abc', method: 'tools/list' });
 r = json(await c.next());
 const names = r.result.tools.map(t => t.name);
-check(r.id === 'abc' && ['openFile','openDiff','getCurrentSelection','getLatestSelection','getOpenEditors','getWorkspaceFolders','getDiagnostics','checkDocumentDirty','saveDocument','close_tab','closeAllDiffTabs'].every(n => names.includes(n)), `tools/list (${names.length} tools)`);
+check(r.id === 'abc' && ['openFile','openDiff','getCurrentSelection','getLatestSelection','getOpenEditors','getWorkspaceFolders','getDiagnostics','checkDocumentDirty','saveDocument','close_tab','closeAllDiffTabs','buildProject','getProjectInfo'].every(n => names.includes(n)), `tools/list (${names.length} tools)`);
 
 // 4. tools/call goes through the main thread; unicode + large payload (>64KiB) + fragmented frames.
 const big = 'Привіт ✓ '.repeat(12000);

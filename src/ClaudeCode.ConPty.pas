@@ -46,6 +46,8 @@ type
   end;
 
 function ConPtyAvailable: Boolean;
+{ A job object that kills its processes when the handle is closed; 0 on failure. }
+function CreateKillOnCloseJob: THandle;
 
 implementation
 
