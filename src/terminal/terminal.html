@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+/*XTERM_CSS*/
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+#terminal { position: absolute; left: 6px; top: 4px; right: 2px; bottom: 2px; }
+.xterm .xterm-viewport { scrollbar-width: thin; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script>/*XTERM_JS*/</script>
+<script>/*FIT_JS*/</script>
+<script>/*WEBLINKS_JS*/</script>
+<script>/*UNICODE11_JS*/</script>
+<script>
+(function () {
+  'use strict';
+  // Host <-> page protocol.
+  // Page -> host: JSON strings {t:'ready'|'in'|'resize'|'link', ...}
+  // Host -> page: 'o' + base64 bytes (terminal output), 'c' + JSON config, 'f' (focus), 'r' (reset),
+  //               'i' + text (simulate typing), 'd' (dump screen text back as {t:'dump'})
+  const host = window.chrome && window.chrome.webview;
+  const post = (msg) => { if (host) host.postMessage(JSON.stringify(msg)); };
+
+  const term = new Terminal({
+    allowProposedApi: true,
+    cursorBlink: true,
+    fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace",
+    fontSize: 14,
+    scrollback: 10000,
+    windowsPty: { backend: 'conpty' },
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4' }
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => post({ t: 'link', uri })));
+  term.loadAddon(new Unicode11Addon.Unicode11Addon());
+  term.unicode.activeVersion = '11';
+  term.open(document.getElementById('terminal'));
+
+  // Ctrl+C copies when there is a selection (otherwise it is ^C for Claude);
+  // Ctrl+V / Shift+Insert paste through the browser so bracketed paste works.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyC' && term.hasSelection()) {
+      post({ t: 'copy', text: term.getSelection() });
+      term.clearSelection();
+      return false;
+    }
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+      if (term.hasSelection()) post({ t: 'copy', text: term.getSelection() });
+      return false;
+    }
+    if ((e.ctrlKey && !e.altKey && e.code === 'KeyV') || (e.shiftKey && e.code === 'Insert')) {
+      return false;
+    }
+    return true;
+  });
+
+  term.onData((d) => post({ t: 'in', d }));
+  term.onBinary((d) => post({ t: 'in', d }));
+  term.onResize(({ cols, rows }) => post({ t: 'resize', cols, rows }));
+
+  const refit = () => { try { fit.fit(); } catch (e) { } };
+  // While a splitter is being dragged the size changes continuously; every change would make
+  // Claude redraw its whole screen, so only refit once the size has settled.
+  let refitTimer = 0;
+  new ResizeObserver(() => {
+    clearTimeout(refitTimer);
+    refitTimer = setTimeout(refit, 120);
+  }).observe(document.body);
+
+  const decode = (b64) => {
+    const s = atob(b64);
+    const a = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+    return a;
+  };
+
+  if (host) {
+    host.addEventListener('message', (e) => {
+      const m = e.data;
+      if (typeof m !== 'string' || m.length === 0) return;
+      switch (m[0]) {
+        case 'o': term.write(decode(m.substring(1))); break;
+        case 'c': {
+          const cfg = JSON.parse(m.substring(1));
+          if (cfg.fontFamily) term.options.fontFamily = cfg.fontFamily;
+          if (cfg.fontSize) term.options.fontSize = cfg.fontSize;
+          if (cfg.theme) {
+            term.options.theme = cfg.theme;
+            document.body.style.background = cfg.theme.background || '';
+          }
+          refit();
+          post({ t: 'resize', cols: term.cols, rows: term.rows });
+          break;
+        }
+        case 'f': term.focus(); break;
+        case 'r': term.reset(); break;
+        case 'i': term.input(m.substring(1), true); break;
+        case 'd': {
+          const b = term.buffer.active, lines = [];
+          for (let i = 0; i < b.length; i++) lines.push(b.getLine(i).translateToString(true));
+          post({ t: 'dump', text: lines.join('\n').replace(/\s+$/, '') });
+          break;
+        }
+      }
+    });
+  }
+
+  refit();
+  term.focus();
+  post({ t: 'ready', cols: term.cols, rows: term.rows });
+})();
+</script>
+</body>
+</html>

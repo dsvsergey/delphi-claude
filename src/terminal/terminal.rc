@@ -1,0 +1,6 @@
+CC_TERMINAL_HTML RCDATA "terminal.html"
+CC_XTERM_CSS     RCDATA "..\..\third_party\xterm\xterm.css"
+CC_XTERM_JS      RCDATA "..\..\third_party\xterm\xterm.js"
+CC_FIT_JS        RCDATA "..\..\third_party\xterm\addon-fit.js"
+CC_WEBLINKS_JS   RCDATA "..\..\third_party\xterm\addon-web-links.js"
+CC_UNICODE11_JS  RCDATA "..\..\third_party\xterm\addon-unicode11.js"
