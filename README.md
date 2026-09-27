@@ -71,9 +71,12 @@ After a session ends, pressing Enter in the panel starts a new one.
 
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
-- **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste;
+- **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste text; a copied picture (screenshot) is saved as PNG and its path pasted so Claude attaches it; copied files become `@`-mentions;
+- files dragged onto the terminal are pasted as `@`-mentions (pictures as paths);
 - **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
 - **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
+
+The panel's status line shows **Working...**, **Waiting for you** or **Ready** with Claude's current title. When a turn ends or Claude asks for you while the panel is hidden or the IDE is in the background, the IDE flashes on the taskbar and the panel caption gets ` *`.
 
 Closing the panel or the IDE ends the session together with all its child processes (Job Object).
 Terminal colors follow the light or dark IDE theme; the font is taken from the code editor.
@@ -126,6 +129,9 @@ If Claude Code is already running in a separate terminal in the project folder, 
 When Claude proposes an edit, a diff window opens:
 **Accept (Ctrl+Enter)** sends the content (including your edits from the *Proposed* tab), then Claude writes the file;
 **Reject (Esc)** or closing the window rejects the edit. You can also answer in the Claude terminal; the window then closes by itself.
+The diff window shows the changed part of each line highlighted, unified or **side by side** (the choice is remembered).
+Single changes can be skipped: **Space** or double-click takes/skips the change under the cursor, **N** / **P** move
+between changes; Accept writes only the taken changes (taking none is a rejection).
 
 ### Files Claude changes on disk
 
