@@ -1,126 +1,128 @@
-# Claude Code для Delphi (RAD Studio 13)
+# Claude Code for Delphi (RAD Studio 13)
 
-Пакет інтеграції IDE, що робить для Delphi те саме, що розширення Claude Code робить для VS Code:
-- **панель Claude Code** всередині IDE (пристиковується, як Project Manager чи Messages) з повноцінним терміналом;
-- Claude бачить редактор Delphi, отримує поточне виділення, відкриває файли
-  й показує запропоновані зміни як diff, який ви приймаєте або відхиляєте в IDE.
+**English** | [Українська](README.uk.md)
 
-## Як це працює
+An IDE integration package that does for Delphi what the Claude Code extension does for VS Code:
+- a **Claude Code panel** inside the IDE (dockable like the Project Manager or Messages) with a full terminal;
+- Claude sees the Delphi editor, gets the current selection, opens files
+  and shows proposed changes as a diff that you accept or reject in the IDE.
 
-Протокол той самий, що в розширеннях для VS Code, JetBrains і Neovim:
+## How it works
 
-1. Пакет запускає WebSocket-сервер на `127.0.0.1` (+ `::1`), випадковий порт.
-2. Записує `%USERPROFILE%\.claude\ide\<port>.lock` (`pid`, `workspaceFolders`, `ideName`, `authToken`).
-   Токен (128 біт, CSPRNG) перевіряється в заголовку `x-claude-code-ide-authorization`.
-3. Claude Code знаходить lock-файл і підключається як MCP-клієнт (JSON-RPC 2.0 через WebSocket).
+It uses the same protocol as the VS Code, JetBrains and Neovim integrations:
 
-### MCP-інструменти, які надає IDE
+1. The package starts a WebSocket server on `127.0.0.1` (+ `::1`) on a random port.
+2. It writes `%USERPROFILE%\.claude\ide\<port>.lock` (`pid`, `workspaceFolders`, `ideName`, `authToken`).
+   The token (128-bit, CSPRNG) is checked in the `x-claude-code-ide-authorization` header.
+3. Claude Code finds the lock file and connects as an MCP client (JSON-RPC 2.0 over WebSocket).
 
-| Інструмент | Що робить у Delphi |
+### MCP tools provided by the IDE
+
+| Tool | What it does in Delphi |
 |---|---|
-| `openFile` | відкриває файл, за потреби виділяє діапазон між `startText`/`endText` |
-| `openDiff` | показує вікно diff (кольоровий порядковий diff + вкладка для редагування); чекає на **Accept** / **Reject** |
-| `getCurrentSelection` / `getLatestSelection` | виділений текст і позиція в активному редакторі |
-| `getOpenEditors` | відкриті вкладки (шлях, активна, чи змінена) |
-| `getWorkspaceFolders` | теки проєктів поточної групи проєктів |
-| `getDiagnostics` | помилки/попередження Error Insight (LSP) для відкритих файлів |
-| `checkDocumentDirty` / `saveDocument` | стан і збереження буфера редактора |
-| `close_tab` / `closeAllDiffTabs` | закриття вікон diff (і незмінених вкладок) |
+| `openFile` | opens a file, optionally selecting the range between `startText`/`endText` |
+| `openDiff` | shows a diff window (colored line diff + editable tab); waits for **Accept** / **Reject** |
+| `getCurrentSelection` / `getLatestSelection` | selected text and position in the active editor |
+| `getOpenEditors` | open tabs (path, active, modified) |
+| `getWorkspaceFolders` | project folders of the current project group |
+| `getDiagnostics` | Error Insight (LSP) errors/warnings for open files |
+| `checkDocumentDirty` / `saveDocument` | editor buffer state and saving |
+| `close_tab` / `closeAllDiffTabs` | closing diff windows (and unmodified tabs) |
 
-Сповіщення від IDE: `selection_changed` (кожні ~300 мс, коли змінюється виділення/курсор)
-та `at_mentioned` (команда «Send Selection to Claude»).
+Notifications from the IDE: `selection_changed` (every ~300 ms when the selection/cursor changes)
+and `at_mentioned` (the "Send Selection to Claude" command).
 
-## Панель Claude Code
+## The Claude Code panel
 
-Панель влаштована так само, як вбудований термінал VS Code:
-- `claude` запускається в **Windows ConPTY** (псевдоконсоль, Windows 10 1809+);
-- вивід відображає **xterm.js** (той самий рушій, що у VS Code) у **WebView2**;
-- xterm.js, сторінка терміналу й `WebView2Loader.dll` вбудовані в BPL як ресурси, окремо нічого копіювати не треба.
-  Потрібен лише Microsoft Edge WebView2 Runtime (є у Windows 11).
+The panel works the same way as the VS Code integrated terminal:
+- `claude` runs in a **Windows ConPTY** (pseudo console, Windows 10 1809+);
+- output is rendered by **xterm.js** (the same engine VS Code uses) in **WebView2**;
+- xterm.js, the terminal page and `WebView2Loader.dll` are embedded in the BPL as resources, nothing else to copy.
+  Only the Microsoft Edge WebView2 Runtime is required (included in Windows 11).
 
-Кнопки панелі: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**.
-Коли сесія завершилась, Enter у панелі запускає нову.
+Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**.
+After a session ends, pressing Enter in the panel starts a new one.
 
-Клавіатура в панелі:
-- усі клавіші (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) ідуть у Claude;
-- **Ctrl+C** при виділеному тексті копіює, **Ctrl+V** / Shift+Insert вставляють;
-- **F-клавіші**, на які в IDE призначено команди (F9, F7, F12...), виконують команди IDE;
-- **Ctrl+Shift+Alt+C** повертає фокус у редактор коду (у редакторі ця ж комбінація відкриває/фокусує панель).
+Keyboard in the panel:
+- all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
+- **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste;
+- **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
+- **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
 
-Закриття панелі чи IDE завершує сесію разом з усіма дочірніми процесами (Job Object).
-Кольори терміналу підлаштовуються під світлу або темну тему IDE, шрифт береться з редактора коду.
+Closing the panel or the IDE ends the session together with all its child processes (Job Object).
+Terminal colors follow the light or dark IDE theme; the font is taken from the code editor.
 
-## Збірка та встановлення
+## Build and install
 
-Потрібно: RAD Studio / Delphi 13 (BDS 37.0) і встановлений Claude Code CLI (`claude` у PATH).
+Requirements: RAD Studio / Delphi 13 (BDS 37.0) and the Claude Code CLI installed (`claude` on PATH).
 
 ```bat
 build.bat
 ```
-Результат: `bin\Win32\ClaudeCodeIDE370.bpl` (для `bin\bds.exe`) і `bin\Win64\ClaudeCodeIDE370.bpl` (для 64-бітної IDE `bin64\bds.exe`).
+Output: `bin\Win32\ClaudeCodeIDE370.bpl` (for `bin\bds.exe`) and `bin\Win64\ClaudeCodeIDE370.bpl` (for the 64-bit IDE `bin64\bds.exe`).
 
-Закрийте IDE і зареєструйте пакет (для обох IDE):
+Close the IDE and register the package (for both IDEs):
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
-Або вручну: *Component → Install Packages… → Add…* і вкажіть BPL, що відповідає розрядності IDE.
-Видалення: `install.ps1 -Uninstall`.
+Or manually: *Component → Install Packages… → Add…* and pick the BPL matching the IDE bitness.
+Uninstall: `install.ps1 -Uninstall`.
 
-Якщо Delphi встановлено в іншому місці: `build.bat "C:\шлях\до\Studio\37.0"`.
+If Delphi is installed elsewhere: `build.bat "C:\path\to\Studio\37.0"`.
 
-## Використання
+## Usage
 
-Меню **Tools → Claude Code**:
+Menu **Tools → Claude Code**:
 
-- **Open Claude Code** (`Ctrl+Shift+Alt+C`): відкриває панель Claude Code і запускає `claude` у теці активного проєкту.
-  Claude отримує `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` і підключається до IDE сам.
-- **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
-- **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента.
-- **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
-- **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
-- **Settings…**: команда для панелі (типово `claude`; наприклад `claude --model opus`) і для зовнішньої консолі (типово `cmd.exe /k claude`).
+- **Open Claude Code** (`Ctrl+Shift+Alt+C`): opens the Claude Code panel and starts `claude` in the active project folder.
+  Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
+- **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
+- **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt.
+- **Status and Log…**: port, number of connected clients, lock file, log.
+- **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
+- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`) and the external console command (default `cmd.exe /k claude`).
 
-Якщо Claude Code вже запущено в окремому терміналі в теці проєкту, виконайте в ньому `/ide` і виберіть **Delphi**.
+If Claude Code is already running in a separate terminal in the project folder, run `/ide` there and choose **Delphi**.
 
-Коли Claude пропонує правку, відкривається вікно diff:
-**Accept (Ctrl+Enter)** передає вміст (разом із вашими правками з вкладки *Proposed*), після чого Claude записує файл;
-**Reject (Esc)** або закриття вікна відхиляють правку. Відповісти можна й у терміналі Claude, тоді вікно закриється само.
+When Claude proposes an edit, a diff window opens:
+**Accept (Ctrl+Enter)** sends the content (including your edits from the *Proposed* tab), then Claude writes the file;
+**Reject (Esc)** or closing the window rejects the edit. You can also answer in the Claude terminal; the window then closes by itself.
 
-## Структура
+## Layout
 
 ```
-ClaudeCodeIDE.dpk              design-time пакет (rtl, vcl, designide, IndySystem, IndyCore)
-src/ClaudeCode.WebSocket.pas   WebSocket-сервер RFC 6455 на Indy (лише loopback, перевірка токена)
-src/ClaudeCode.Mcp.pas         MCP / JSON-RPC, lock-файл, опис інструментів
-src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
-src/ClaudeCode.DiffForm.pas    вікно diff
-src/ClaudeCode.Diff.pas        порядковий diff (LCS)
-src/ClaudeCode.Launcher.pas    запуск CLI з потрібним оточенням
-src/ClaudeCode.TerminalPanel.pas  вбудовуване (dockable) вікно IDE
-src/ClaudeCode.TerminalFrame.pas  фрейм панелі: xterm.js + ConPTY, кнопки, клавіатура
-src/ClaudeCode.WebViewHost.pas    легкий хост WebView2 (сторінка переживає перестиковування)
-src/ClaudeCode.ConPty.pas         псевдоконсоль Windows + Job Object
-src/terminal/                     сторінка терміналу та .rc для ресурсів
-src/ClaudeCode.Wizard.pas      майстер IDE: меню, таймери, налаштування
-tests/TestHost.dpr             консольний хост із фейковим бекендом
-tests/protocol-test.mjs        тест протоколу (Node, «сирий» WebSocket)
-tests/PanelHost.dpr            панель у звичайному VCL-вікні: запускає claude, вводить текст, знімає екран
-third_party/                   xterm.js 6.0 (MIT), WebView2Loader 1.0.4191 (BSD, Microsoft)
+ClaudeCodeIDE.dpk                 design-time package (rtl, vcl, designide, IndySystem, IndyCore)
+src/ClaudeCode.WebSocket.pas      RFC 6455 WebSocket server on Indy (loopback only, token check)
+src/ClaudeCode.Mcp.pas            MCP / JSON-RPC, lock file, tool definitions
+src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
+src/ClaudeCode.DiffForm.pas       diff window
+src/ClaudeCode.Diff.pas           line diff (LCS)
+src/ClaudeCode.Launcher.pas       starting the CLI with the right environment
+src/ClaudeCode.TerminalPanel.pas  dockable IDE window
+src/ClaudeCode.TerminalFrame.pas  panel frame: xterm.js + ConPTY, buttons, keyboard
+src/ClaudeCode.WebViewHost.pas    lightweight WebView2 host (the page survives re-docking)
+src/ClaudeCode.ConPty.pas         Windows pseudo console + Job Object
+src/terminal/                     terminal page and .rc files for resources
+src/ClaudeCode.Wizard.pas         IDE wizard: menu, timers, settings
+tests/TestHost.dpr                console host with a fake backend
+tests/protocol-test.mjs           protocol test (Node, raw WebSocket)
+tests/PanelHost.dpr               the panel in a plain VCL window: starts claude, types text, takes a screenshot
+third_party/                      xterm.js 6.0 (MIT), WebView2Loader 1.0.4191 (BSD, Microsoft)
 ```
 
-### Тест протоколу без IDE
+### Testing without the IDE
 ```bash
 cd tests
 dcc32 -B -NSSystem;System.Win;Winapi;Vcl -U../src -NU../dcu/test -E. TestHost.dpr
-TestHost.exe 20        # друкує PORT і TOKEN
+TestHost.exe 20        # prints PORT and TOKEN
 node protocol-test.mjs <PORT> <TOKEN>
 
-# панель поза IDE (потрібен довірений Claude каталог як робоча тека)
+# the panel outside the IDE (the working folder must be trusted by Claude)
 dcc32 -B -NSSystem;System.Win;Winapi;Vcl;Vcl.Imaging -U../src -R../src -NU../dcu/test -E. PanelHost.dpr
 PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.dump.txt, panelhost.png
 ```
 
-## Обмеження
+## Limitations
 
-- `getDiagnostics` повертає дані Error Insight (LSP) для відкритих файлів, а не вивід компілятора з вікна Messages.
-- Позиції `character` рахуються за індексом символу в рядку редактора; у рядках із не-ASCII символами можливе незначне зміщення.
+- `getDiagnostics` returns Error Insight (LSP) data for open files, not compiler output from the Messages window.
+- `character` positions are counted by character index in the editor line; lines with non-ASCII characters may be slightly off.
