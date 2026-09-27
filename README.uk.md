@@ -53,6 +53,7 @@ Claude Code використовує IDE-з'єднання сам і з ньог
 | `evaluateExpression` | обчислює вираз Delphi у зупиненому процесі (як Evaluate/Modify); побічні ефекти — лише якщо дозволено |
 | `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | точки зупину в коді з умовою і лічильником проходів |
 | `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (чекає наступної зупинки й повертає новий стан), `run`, `terminate` |
+| `getFileHistory` | локальна історія файлу в IDE (`__history\ім'я.~N~`): список версій або текст однієї |
 
 Зміни в дизайнері не зберігаються автоматично: перегляньте їх в IDE і збережіть або відкотіть форму.
 `claude`, запущений поза IDE, може використати інструменти останньої запущеної IDE:
@@ -110,11 +111,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
 - **Build and Fix Errors with Claude**: зберігає змінені файли, збирає активний проєкт і, якщо збірка невдала, вставляє помилки в панель Claude як запит (Enter — надіслати).
 - **Explain Debugger Stop with Claude**: коли програма під налагодженням зупинена (breakpoint, виняток, пауза), вставляє в панель Claude виняток, поточний рядок із кодом і стек викликів як запит.
+- **Create CLAUDE.md for Project...**: записує в `CLAUDE.md` проєкту розділ «Delphi project» (тип, framework, платформи, команда збірки, кодування юнітів, форми, DUnitX-проєкти, коли використовувати `mcp__delphi__*`). Генерується лише частина між `<!-- delphi:begin -->` і `<!-- delphi:end -->`; спершу ви переглядаєте її у вікні diff.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
-- **Settings…**: команда для панелі (типово `claude`; наприклад `claude --model opus`), для зовнішньої консолі (типово `cmd.exe /k claude`) і чи застосовувати зміни файлів від Claude до відкритих редакторів (`1`/`0`).
-
+- **Settings…**: команди для панелі й зовнішньої консолі, модель (`--model`), режим дозволів (`--permission-mode`), інші аргументи, чи давати Claude Delphi-інструменти, чи застосовувати зміни файлів від Claude до відкритих редакторів і чи надсилати запити з контекстного меню одразу.
 
 ### Контекстні меню
 
@@ -126,6 +127,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Project Manager → Add to Claude Context**: вставляє в підказку `@файл` (або `@тека/` для проєкту) для виділених вузлів.
 - **Messages → Fix Build Errors with Claude**: те саме, що команда з меню Tools (вікно Messages не дає прочитати текст
   своїх рядків, тож проєкт перезбирається, щоб зібрати помилки).
+
+Рядок стану кожного вікна редактора коду показує **Claude: off / connected / working / waiting for you**.
+
 Якщо Claude Code вже запущено в окремому терміналі в теці проєкту, виконайте в ньому `/ide` і виберіть **Delphi**.
 
 Коли Claude пропонує правку, відкривається вікно diff:
@@ -146,7 +150,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   фрагменти `�`, якщо текст навколо збігається). Рядки, які не вдалося відновити, показуються окремо.
 - Після прийнятого diff Delphi-файл (`.pas`, `.dpr`, `.dpk`, `.inc`), який Claude зберіг як UTF-8 без BOM, повертається
   в ANSI, якщо був ANSI, або отримує UTF-8 BOM, щоб компілятор правильно читав не-ASCII текст.
-- Вимкнути: **Settings…**, третє поле `0`.
+- Вимкнути: **Settings…**, прапорець «Apply Claude's file changes to open editors».
 
 ## Структура
 
@@ -161,6 +165,9 @@ src/ClaudeCode.ComponentProps.pas DFM-текст і встановлення в�
 src/ClaudeCode.FormTools.pas  інструменти дизайнера форм
 src/ClaudeCode.DebugTools.pas інструменти дебагера (стан, обчислення, точки зупину, кроки)
 src/ClaudeCode.ContextMenus.pas пункти контекстних меню редактора, Project Manager і Messages
+src/ClaudeCode.FileHistory.pas резервні копії IDE з __history (getFileHistory)
+src/ClaudeCode.SettingsForm.pas вікно Settings
+src/ClaudeCode.ClaudeMd.pas   Create CLAUDE.md for Project
 src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
 src/ClaudeCode.DiffForm.pas    вікно diff
 src/ClaudeCode.Diff.pas        порядковий diff (LCS)

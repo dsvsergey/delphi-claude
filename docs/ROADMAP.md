@@ -153,10 +153,15 @@
 
 ---
 
-## Етап 7. Дрібниці  `[ ]`
+## Етап 7. Дрібниці  `[x]`
 
-- **Init CLAUDE.md for Delphi**: генерація з даних `getProjectInfo` (версія, VCL/FMX,
-  платформи, команда збірки, тести, правила кодування).
-- Settings: модель, permission mode, додаткові аргументи CLI — окремими полями.
-- `getFileHistory`: попередні версії з `__history` (`IOTAFileHistoryManager`).
-- Статус-бар IDE: кількість підключених клієнтів.
+- **Create CLAUDE.md for Project...** (`src/ClaudeCode.ClaudeMd.pas`): розділ між `<!-- delphi:begin/end -->` —
+  тип, framework, платформи/конфігурації, вихідний файл, defines/шляхи, група проєктів, команда збірки
+  (`rsvars.bat` + msbuild), DUnitX-проєкти, переважне кодування юнітів, форми, підказки щодо `mcp__delphi__*`.
+  Решта `CLAUDE.md` не чіпається; зміна переглядається у diff-вікні.
+- **Settings** (`src/ClaudeCode.SettingsForm.pas`): команди панелі/консолі, `--model`, `--permission-mode`,
+  інші аргументи, Delphi-інструменти (`--mcp-config`) так/ні, синхронізація редактора, надсилати запити з
+  контекстного меню одразу.
+- **`getFileHistory`** (`src/ClaudeCode.FileHistory.pas`, тест у protocol-test): версії з `__history`, текст версії.
+- **Індикатор** у рядку стану вікон редактора: `Claude: off / connected (N) / working / waiting for you`;
+  прибирається при вивантаженні пакета.
