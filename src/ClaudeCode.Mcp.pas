@@ -287,6 +287,47 @@ begin
       TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form')),
       TJSONPair.Create('component', Prop('string', 'Component name'))],
       ['component'])));
+  // Debugger.
+  Result.Add(Tool('getDebugState',
+    'Get the state of the program being debugged in the Delphi IDE: process state, the current thread with ' +
+    'its call stack and the source around the current line, the exception (when stopped on one) and all ' +
+    'threads. There is no list of local variables: read the code and use evaluateExpression.',
+    Schema([
+      TJSONPair.Create('maxFrames', Prop('number', 'Call stack frames to return (default 30)')),
+      TJSONPair.Create('contextLines', Prop('number', 'Source lines shown before and after the current line (default 6)'))],
+      [])));
+  Result.Add(Tool('evaluateExpression',
+    'Evaluate a Delphi expression in the stopped debugged process (current thread and frame), like the ' +
+    'Evaluate/Modify dialog: variables, fields, properties, typecasts, Length(), array elements...',
+    Schema([
+      TJSONPair.Create('expression', Prop('string', 'Delphi expression, e.g. Customer.Name or Length(Items)')),
+      TJSONPair.Create('allowSideEffects', Prop('boolean', 'Allow calling functions/property getters with side effects (default false)'))],
+      ['expression'])));
+  Result.Add(Tool('setBreakpoint',
+    'Add a source breakpoint in the Delphi IDE (or update the one on that line)',
+    Schema([
+      TJSONPair.Create('file', Prop('string', 'Unit path')),
+      TJSONPair.Create('line', Prop('number', '1-based line number')),
+      TJSONPair.Create('condition', Prop('string', 'Break only when this Delphi expression is True')),
+      TJSONPair.Create('passCount', Prop('number', 'Break on the Nth pass')),
+      TJSONPair.Create('enabled', Prop('boolean', 'Default true'))],
+      ['file', 'line'])));
+  Result.Add(Tool('listBreakpoints', 'List the source breakpoints set in the Delphi IDE',
+    Schema([], [])));
+  Result.Add(Tool('removeBreakpoint', 'Remove a source breakpoint from the Delphi IDE',
+    Schema([
+      TJSONPair.Create('file', Prop('string', 'Unit path')),
+      TJSONPair.Create('line', Prop('number', '1-based line number'))],
+      ['file', 'line'])));
+  Result.Add(Tool('debugControl',
+    'Control the program being debugged: "stepOver", "stepInto", "runUntilReturn", "runToCursor" and "pause" ' +
+    'wait until it stops again and return the new debug state; "run" continues (waits only if waitSec is ' +
+    'given, e.g. until the next breakpoint); "terminate" ends the program.',
+    Schema([
+      TJSONPair.Create('action', Prop('string', 'run, stepOver, stepInto, runUntilReturn, runToCursor, pause or terminate')),
+      TJSONPair.Create('waitSec', Prop('number', 'How long to wait for the next stop (default 10; 0 for run)'))],
+      ['action'])));
+
   Result.Add(Tool('captureForm',
     'Save a PNG picture of a VCL form (or of one windowed control on it) as it looks in the designer, ' +
     'and return the file path; open it with the Read tool to look at the layout',

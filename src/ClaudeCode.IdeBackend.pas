@@ -65,7 +65,7 @@ implementation
 
 uses
   System.Generics.Collections, System.Generics.Defaults, System.Math, Vcl.Forms,
-  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools;
+  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools, ClaudeCode.DebugTools;
 
 const
   MAX_SELECTION_BYTES = 2 * 1024 * 1024;
@@ -271,6 +271,7 @@ procedure TDelphiIdeBackend.Shutdown;
 begin
   FBuild.Cancel;
   FSync.Enabled := False;
+  CancelDebugWaits;
 end;
 
 function TDelphiIdeBackend.IdeName: string;
@@ -443,6 +444,18 @@ begin
     Done(ToolDeleteComponent(Args))
   else if Name = 'captureForm' then
     Done(ToolCaptureForm(Args))
+  else if Name = 'getDebugState' then
+    Done(ToolGetDebugState(Args))
+  else if Name = 'evaluateExpression' then
+    Done(ToolEvaluateExpression(Args))
+  else if Name = 'setBreakpoint' then
+    Done(ToolSetBreakpoint(Args))
+  else if Name = 'listBreakpoints' then
+    Done(ToolListBreakpoints(Args))
+  else if Name = 'removeBreakpoint' then
+    Done(ToolRemoveBreakpoint(Args))
+  else if Name = 'debugControl' then
+    ToolDebugControl(Args, Done)
   else
     Done(TToolResult.Error('Unknown tool: ' + Name));
 end;

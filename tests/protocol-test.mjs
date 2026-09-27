@@ -130,7 +130,7 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   check(h.status === 202, 'http: notification -> 202');
   h = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const hn = h.json.result.tools.map(t => t.name);
-  check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
+  check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm','getDebugState','evaluateExpression','setBreakpoint','listBreakpoints','removeBreakpoint','debugControl'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
   h = await post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'getProjectInfo', arguments: {} } });
   check(h.json.id === 3 && JSON.parse(h.json.result.content[0].text).project.name === 'Fake', 'http: tools/call through the main thread');
   h = await post({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'openDiff', arguments: {} } });

@@ -14,7 +14,8 @@ uses
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
-  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools;
+  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
+  ClaudeCode.DebugTools;
 
 const
   DEFAULT_PANEL_COMMAND = 'claude';
@@ -60,6 +61,7 @@ type
     procedure SettingsExecute(Sender: TObject);
     procedure BuildFixExecute(Sender: TObject);
     procedure BuildFixDone(const R: TToolResult);
+    procedure ExplainStopExecute(Sender: TObject);
   public
     constructor Create;
     destructor Destroy; override;
@@ -373,6 +375,7 @@ begin
   AddItem(NewAction('ClaudeCodeConsoleAction', 'Open in External Console', '', OpenConsoleExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeBuildFixAction', 'Build and Fix Errors with Claude', '', BuildFixExecute));
+  AddItem(NewAction('ClaudeCodeExplainStopAction', 'Explain Debugger Stop with Claude', '', ExplainStopExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
@@ -613,6 +616,29 @@ begin
     Frame.PasteInput(Prompt);
     Frame.FocusTerminal;
   end;
+end;
+
+procedure TClaudeCodeWizard.ExplainStopExecute(Sender: TObject);
+var
+  Frame: TClaudeTerminalFrame;
+  Prompt: string;
+begin
+  Frame := ClaudePanelFrame;
+  if (Frame = nil) or not Frame.SessionRunning then
+  begin
+    ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.');
+    Exit;
+  end;
+  Prompt := DebugStopPrompt;
+  if Prompt = '' then
+  begin
+    ShowMessage('The debugged program is not stopped (no breakpoint, exception or pause).');
+    Exit;
+  end;
+  // Pasted, not submitted: the user can add what they expected and press Enter.
+  ShowClaudePanel;
+  Frame.PasteInput(Prompt);
+  Frame.FocusTerminal;
 end;
 
 procedure TClaudeCodeWizard.RestartExecute(Sender: TObject);

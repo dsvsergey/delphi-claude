@@ -49,6 +49,10 @@ as `mcp__delphi__*` and Claude asks for permission before using them like any MC
 | `setComponentProperties` | changes properties through the designer: nested (`Font.Size`), enums/sets, `clRed`-style identifiers, component references, `Items`/`Lines`, event handlers (created if missing); returns old/new values |
 | `createComponent` / `deleteComponent` | drops a registered component on the form (name, parent, bounds, properties) / deletes one |
 | `captureForm` | PNG of a VCL form or control as drawn in the designer; Claude opens it with its Read tool |
+| `getDebugState` | the debugged process: state, current thread with call stack and source around the current line, the exception when stopped on one, all threads |
+| `evaluateExpression` | evaluates a Delphi expression in the stopped process (like Evaluate/Modify); side effects only when allowed |
+| `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | source breakpoints with an optional condition and pass count |
+| `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (waits for the next stop and returns the new state), `run`, `terminate` |
 
 Designer changes are not saved automatically: review them in the IDE and save or revert the form.
 A `claude` started outside the IDE can use the tools of the most recently started IDE with
@@ -100,6 +104,7 @@ Menu **Tools → Claude Code**:
   Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
 - **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
+- **Explain Debugger Stop with Claude**: when the debugged program is stopped (breakpoint, exception, pause), pastes the exception, the current line with its source and the call stack into the Claude panel as a request.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
@@ -135,6 +140,7 @@ src/ClaudeCode.TextSync.pas       encodings, restoring lost characters, changed 
 src/ClaudeCode.EditorSync.pas     applies disk changes to open editors, fixes encodings after a diff
 src/ClaudeCode.ComponentProps.pas DFM text and setting properties from JSON via RTTI (no ToolsAPI)
 src/ClaudeCode.FormTools.pas      form designer tools
+src/ClaudeCode.DebugTools.pas     debugger tools (state, evaluate, breakpoints, stepping)
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)
@@ -170,3 +176,4 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 - `buildProject` compiles files from disk: unsaved editor changes are reported in `unsavedFiles` unless `saveModified` is set.
 - `character` positions are UTF-16 indexes computed from the editor buffer; they have not been verified against every IDE edge case (tabs, very long lines).
 - Encoding repair only sees files written through an accepted diff or open in the editor; files Claude writes in auto-accept mode while closed keep whatever encoding Claude used.
+- The debugger API has no list of local variables: Claude reads the code around the current line and evaluates what it needs. Exception class/message come from evaluating `ExceptObject` (best effort).

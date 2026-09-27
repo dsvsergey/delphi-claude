@@ -89,19 +89,28 @@
 
 ---
 
-## Етап 4. Дебагер  `[ ]`
+## Етап 4. Дебагер  `[x]`
 
-### 4.1 `getDebugState`
-- Стан процесу, поточний потік, call stack (`IOTAThread.GetOTAStackFrame...`),
-  поточна позиція, останній виняток (клас, повідомлення).
+Модуль: `src/ClaudeCode.DebugTools.pas` (інструменти сервера `delphi`).
 
-### 4.2 `evaluateExpression`
-- `IOTAThread.Evaluate` у зупиненому процесі (з обмеженням розміру результату).
+### 4.1 `getDebugState`  `[x]`
+- Стан процесу, поточний потік (файл/рядок, код навколо, стек викликів через `StartCallStackAccess`),
+  усі потоки. На винятку — клас і повідомлення через обчислення `ExceptObject` (за можливості).
+- Списку локальних змінних в OTA немає: Claude читає код і обчислює потрібні вирази.
 
-### 4.3 `setBreakpoint` / `listBreakpoints` / `removeBreakpoint`
+### 4.2 `evaluateExpression`  `[x]`
+- `IOTAThread.Evaluate`; відкладений результат (`erDeferred`) чекається через `IOTAThreadNotifier`
+  + `ProcessDebugEvents` (таймаут 5 с). Побічні ефекти — лише з `allowSideEffects`.
 
-### 4.4 Команда **Explain Exception with Claude**
-- При зупинці на винятку: стек + локальні змінні + рядок коду → запит у термінал.
+### 4.3 `setBreakpoint` / `listBreakpoints` / `removeBreakpoint`  `[x]`
+- Точки зупину в коді з умовою і лічильником проходів.
+
+### 4.4 `debugControl`  `[x]`
+- `stepOver`/`stepInto`/`runUntilReturn`/`runToCursor`/`pause` чекають наступної зупинки і повертають
+  новий стан; `run` (за бажанням чекає `waitSec`, наприклад до breakpoint), `terminate`.
+
+### 4.5 Команда **Explain Debugger Stop with Claude**  `[x]`
+- Виняток + поточний рядок з кодом + стек → запит у панель (без відправки).
 
 ---
 

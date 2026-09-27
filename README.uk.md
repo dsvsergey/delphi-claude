@@ -49,6 +49,10 @@ Claude Code використовує IDE-з'єднання сам і з ньог
 | `setComponentProperties` | змінює властивості через дизайнер: вкладені (`Font.Size`), enum/set, ідентифікатори на кшталт `clRed`, посилання на компоненти, `Items`/`Lines`, обробники подій (створюються, якщо їх немає); повертає старі/нові значення |
 | `createComponent` / `deleteComponent` | кладе на форму зареєстрований компонент (ім'я, батько, розміри, властивості) / видаляє компонент |
 | `captureForm` | PNG VCL-форми або контролу, як вони виглядають у дизайнері; Claude відкриває його інструментом Read |
+| `getDebugState` | процес під налагодженням: стан, поточний потік зі стеком викликів і кодом навколо поточного рядка, виняток (якщо зупинка на ньому), усі потоки |
+| `evaluateExpression` | обчислює вираз Delphi у зупиненому процесі (як Evaluate/Modify); побічні ефекти — лише якщо дозволено |
+| `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | точки зупину в коді з умовою і лічильником проходів |
+| `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (чекає наступної зупинки й повертає новий стан), `run`, `terminate` |
 
 Зміни в дизайнері не зберігаються автоматично: перегляньте їх в IDE і збережіть або відкотіть форму.
 `claude`, запущений поза IDE, може використати інструменти останньої запущеної IDE:
@@ -100,6 +104,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   Claude отримує `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` і підключається до IDE сам.
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
 - **Build and Fix Errors with Claude**: зберігає змінені файли, збирає активний проєкт і, якщо збірка невдала, вставляє помилки в панель Claude як запит (Enter — надіслати).
+- **Explain Debugger Stop with Claude**: коли програма під налагодженням зупинена (breakpoint, виняток, пауза), вставляє в панель Claude виняток, поточний рядок із кодом і стек викликів як запит.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
@@ -135,6 +140,7 @@ src/ClaudeCode.TextSync.pas   кодування, відновлення сим�
 src/ClaudeCode.EditorSync.pas перенесення змін з диска у відкриті редактори, виправлення кодування після diff
 src/ClaudeCode.ComponentProps.pas DFM-текст і встановлення властивостей з JSON через RTTI (без ToolsAPI)
 src/ClaudeCode.FormTools.pas  інструменти дизайнера форм
+src/ClaudeCode.DebugTools.pas інструменти дебагера (стан, обчислення, точки зупину, кроки)
 src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
 src/ClaudeCode.DiffForm.pas    вікно diff
 src/ClaudeCode.Diff.pas        порядковий diff (LCS)
@@ -170,3 +176,4 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 - `buildProject` компілює файли з диска: незбережені зміни в редакторі повертаються в `unsavedFiles`, якщо не задано `saveModified`.
 - Позиції `character` — індекси UTF-16, обчислені з буфера редактора; на всіх крайніх випадках (табуляції, дуже довгі рядки) вони не перевірені.
 - Виправлення кодування бачить лише файли, записані через прийнятий diff або відкриті в редакторі; закриті файли, які Claude пише в режимі auto-accept, лишаються в кодуванні Claude.
+- API дебагера не дає списку локальних змінних: Claude читає код навколо поточного рядка й обчислює потрібне. Клас і текст винятку беруться з обчислення `ExceptObject` (за можливості).
