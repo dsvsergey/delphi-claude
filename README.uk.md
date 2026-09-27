@@ -110,6 +110,17 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
 - **Settings…**: команда для панелі (типово `claude`; наприклад `claude --model opus`), для зовнішньої консолі (типово `cmd.exe /k claude`) і чи застосовувати зміни файлів від Claude до відкритих редакторів (`1`/`0`).
 
+
+### Контекстні меню
+
+- **Редактор коду → Claude Code**: *Explain*, *Refactor*, *Find Bugs*, *Write DUnitX Test*, *Add XML Documentation*
+  надсилають запит з `@файл#Lx-y` для виділення (або поточного рядка);
+  *Ask Claude About This...* лише вставляє посилання в підказку. Тексти запитів можна змінити у
+  `%USERPROFILE%\.claude\delphi-prompts.json`, наприклад `{"explain": "Поясни цей код: {ref}"}`
+  (ключі: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+- **Project Manager → Add to Claude Context**: вставляє в підказку `@файл` (або `@тека/` для проєкту) для виділених вузлів.
+- **Messages → Fix Build Errors with Claude**: те саме, що команда з меню Tools (вікно Messages не дає прочитати текст
+  своїх рядків, тож проєкт перезбирається, щоб зібрати помилки).
 Якщо Claude Code вже запущено в окремому терміналі в теці проєкту, виконайте в ньому `/ide` і виберіть **Delphi**.
 
 Коли Claude пропонує правку, відкривається вікно diff:
@@ -141,6 +152,7 @@ src/ClaudeCode.EditorSync.pas перенесення змін з диска у �
 src/ClaudeCode.ComponentProps.pas DFM-текст і встановлення властивостей з JSON через RTTI (без ToolsAPI)
 src/ClaudeCode.FormTools.pas  інструменти дизайнера форм
 src/ClaudeCode.DebugTools.pas інструменти дебагера (стан, обчислення, точки зупину, кроки)
+src/ClaudeCode.ContextMenus.pas пункти контекстних меню редактора, Project Manager і Messages
 src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
 src/ClaudeCode.DiffForm.pas    вікно diff
 src/ClaudeCode.Diff.pas        порядковий diff (LCS)

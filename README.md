@@ -110,6 +110,17 @@ Menu **Tools → Claude Code**:
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
 - **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`), the external console command (default `cmd.exe /k claude`) and whether Claude's file changes are applied to open editors (`1`/`0`).
 
+
+### Context menus
+
+- **Code editor → Claude Code**: *Explain*, *Refactor*, *Find Bugs*, *Write DUnitX Test*, *Add XML Documentation*
+  send a request with `@file#Lx-y` for the selection (or the current line) and submit it;
+  *Ask Claude About This...* only puts the reference into the prompt. The request texts can be changed in
+  `%USERPROFILE%\.claude\delphi-prompts.json`, e.g. `{"explain": "Поясни цей код: {ref}"}`
+  (keys: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+- **Project Manager → Add to Claude Context**: puts `@file` (or `@folder/` for a project) for the selected nodes into the prompt.
+- **Messages → Fix Build Errors with Claude**: the same as the Tools menu command (the Messages view does not expose
+  the text of its lines, so the project is rebuilt to collect the errors).
 If Claude Code is already running in a separate terminal in the project folder, run `/ide` there and choose **Delphi**.
 
 When Claude proposes an edit, a diff window opens:
@@ -141,6 +152,7 @@ src/ClaudeCode.EditorSync.pas     applies disk changes to open editors, fixes en
 src/ClaudeCode.ComponentProps.pas DFM text and setting properties from JSON via RTTI (no ToolsAPI)
 src/ClaudeCode.FormTools.pas      form designer tools
 src/ClaudeCode.DebugTools.pas     debugger tools (state, evaluate, breakpoints, stepping)
+src/ClaudeCode.ContextMenus.pas   editor, Project Manager and Messages context menu entries
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)

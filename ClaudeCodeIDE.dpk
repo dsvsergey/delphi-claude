@@ -48,6 +48,7 @@ contains
   ClaudeCode.ComponentProps in 'src\ClaudeCode.ComponentProps.pas',
   ClaudeCode.FormTools in 'src\ClaudeCode.FormTools.pas',
   ClaudeCode.DebugTools in 'src\ClaudeCode.DebugTools.pas',
+  ClaudeCode.ContextMenus in 'src\ClaudeCode.ContextMenus.pas',
   ClaudeCode.IdeBackend in 'src\ClaudeCode.IdeBackend.pas',
   ClaudeCode.Launcher in 'src\ClaudeCode.Launcher.pas',
   ClaudeCode.ConPty in 'src\ClaudeCode.ConPty.pas',

@@ -114,12 +114,17 @@
 
 ---
 
-## Етап 5. Контекстні меню та швидкі дії  `[ ]`
+## Етап 5. Контекстні меню та швидкі дії  `[x]`
 
-- Локальне меню редактора: **Explain**, **Refactor**, **Write DUnitX Test**, **Add XML Doc**
-  (підставляє `@file#Lx-y` + шаблон запиту; шаблони редагуються в Settings).
-- Messages view (`INTAMessageNotifier.MessageViewMenuShown`): **Fix with Claude** для рядка помилки.
-- Project Manager (`IOTAProjectManagerMenu`): **Add to Claude Context** (`@path`).
+Модуль: `src/ClaudeCode.ContextMenus.pas`.
+
+- Локальне меню редактора (`INTAEditorLocalMenu.RegisterActionList`, підменю **Claude Code** після Clipboard):
+  **Explain**, **Refactor**, **Find Bugs**, **Write DUnitX Test**, **Add XML Documentation** — запит з
+  `@file#Lx-y` вставляється і надсилається (термінал: команда `s` = paste + Enter); **Ask Claude About This...**
+  лише вставляє посилання. Шаблони перевизначаються у `~/.claude/delphi-prompts.json`.
+- Project Manager (`IOTAProjectMenuItemCreatorNotifier`): **Add to Claude Context** → `@file` / `@folder/`.
+- Messages view (`INTAMessageNotifier.MessageViewMenuShown`): **Fix Build Errors with Claude**. Текст рядків
+  Messages через OTA недоступний, тому помилки збираються повторною збіркою (як у команді з меню Tools).
 
 ---
 

@@ -15,7 +15,7 @@ uses
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
-  ClaudeCode.DebugTools;
+  ClaudeCode.DebugTools, ClaudeCode.ContextMenus, System.IOUtils;
 
 const
   DEFAULT_PANEL_COMMAND = 'claude';
@@ -37,6 +37,7 @@ type
     FSendSelAction: TAction;
     FLastSent: TSelectionInfo;
     FLog: TStringList;
+    FContextMenus: TClaudeContextMenus;
     procedure AddLog(const Msg: string);
     procedure StartServer;
     procedure CreateMenu;
@@ -62,6 +63,12 @@ type
     procedure BuildFixExecute(Sender: TObject);
     procedure BuildFixDone(const R: TToolResult);
     procedure ExplainStopExecute(Sender: TObject);
+    function SessionFrame: TClaudeTerminalFrame;
+    procedure SendToClaude(const Text: string; Submit: Boolean);
+    function FileRef(const Path: string; Line1, Line2: Integer): string;
+    function PromptTemplate(const Command: string): string;
+    procedure EditorCommand(const Command: string);
+    procedure AddToContext(const Files: TArray<string>);
   public
     constructor Create;
     destructor Destroy; override;
@@ -101,6 +108,14 @@ begin
 
   CreateMenu;
   FBackend.Sync.Enabled := ReadSetting('SyncEditor', '1') <> '0';
+  FContextMenus := TClaudeContextMenus.Create(
+    function: Boolean
+    begin
+      Result := FBackend.CurrentSelection(False).Valid;
+    end);
+  FContextMenus.OnEditorCommand := EditorCommand;
+  FContextMenus.OnAddToContext := AddToContext;
+  FContextMenus.OnFixBuildErrors := BuildFixExecute;
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
@@ -109,6 +124,7 @@ end;
 
 destructor TClaudeCodeWizard.Destroy;
 begin
+  FreeAndNil(FContextMenus);
   FreeAndNil(FSelTimer);
   FreeAndNil(FWorkspaceTimer);
   UnregisterClaudePanel; // stops the terminal session
@@ -616,6 +632,123 @@ begin
     Frame.PasteInput(Prompt);
     Frame.FocusTerminal;
   end;
+end;
+
+{ Requests from the context menus }
+
+function TClaudeCodeWizard.SessionFrame: TClaudeTerminalFrame;
+begin
+  Result := ClaudePanelFrame;
+  if (Result = nil) or not Result.SessionRunning then
+  begin
+    ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.');
+    Result := nil;
+  end;
+end;
+
+procedure TClaudeCodeWizard.SendToClaude(const Text: string; Submit: Boolean);
+var
+  Frame: TClaudeTerminalFrame;
+begin
+  Frame := SessionFrame;
+  if Frame = nil then
+    Exit;
+  ShowClaudePanel;
+  Frame.PasteInput(Text, Submit);
+  Frame.FocusTerminal;
+end;
+
+{ "@path#L10-20" as Claude Code reads it: relative to the session folder when inside it. }
+function TClaudeCodeWizard.FileRef(const Path: string; Line1, Line2: Integer): string;
+var
+  Base, P: string;
+begin
+  P := Path;
+  Base := '';
+  if ClaudePanelFrame <> nil then
+    Base := ClaudePanelFrame.SessionDir;
+  if Base <> '' then
+  begin
+    Base := IncludeTrailingPathDelimiter(Base);
+    if SameText(Copy(P, 1, Length(Base)), Base) then
+      P := Copy(P, Length(Base) + 1, MaxInt);
+  end;
+  P := StringReplace(P, '\', '/', [rfReplaceAll]);
+  if Line1 > 0 then
+  begin
+    P := P + '#L' + IntToStr(Line1);
+    if Line2 > Line1 then
+      P := P + '-' + IntToStr(Line2);
+  end;
+  if P.Contains(' ') then
+    Result := '@"' + P + '"'
+  else
+    Result := '@' + P;
+end;
+
+// Request templates; "{ref}" is replaced by the @-reference. Each can be overridden in
+// ~/.claude/delphi-prompts.json, e.g. "explain": "Поясни цей код: {ref}".
+function TClaudeCodeWizard.PromptTemplate(const Command: string): string;
+var
+  FileName, Text: string;
+  V: TJSONValue;
+begin
+  if Command = ecExplain then
+    Result := 'Explain what this code does, how it fits into the unit, and anything non-obvious: {ref}'
+  else if Command = ecRefactor then
+    Result := 'Refactor this code for readability and maintainability without changing its behavior: {ref}'
+  else if Command = ecReview then
+    Result := 'Review this code for bugs: wrong logic, resource leaks, missing try/finally, exception safety, ' +
+      'threading and off-by-one errors. List concrete problems with line numbers and how to fix them: {ref}'
+  else if Command = ecTest then
+    Result := 'Write DUnitX unit tests for this code. Follow the test conventions already used in the project; ' +
+      'create a test unit if there is none: {ref}'
+  else if Command = ecDoc then
+    Result := 'Add XML documentation comments (/// <summary>, <param>, <returns>) to the declarations in this code: {ref}'
+  else
+    Result := '{ref} ';
+  FileName := TPath.Combine(ExtractFileDir(ClaudeIdeLockDir), 'delphi-prompts.json');
+  if FileExists(FileName) and ReadTextFileAutoEnc(FileName, Text) then
+  begin
+    V := TJSONObject.ParseJSONValue(Text);
+    try
+      if (V is TJSONObject) and (JsonStr(TJSONObject(V), Command) <> '') then
+        Result := JsonStr(TJSONObject(V), Command);
+    finally
+      V.Free;
+    end;
+  end;
+end;
+
+procedure TClaudeCodeWizard.EditorCommand(const Command: string);
+var
+  Sel: TSelectionInfo;
+  Line1, Line2: Integer;
+begin
+  Sel := FBackend.CurrentSelection(False);
+  if not Sel.Valid then
+    Exit;
+  Line1 := Sel.StartLine + 1;
+  Line2 := Sel.EndLine + 1;
+  // A selection ending at column 0 does not include that line.
+  if (Sel.EndChar = 0) and (Line2 > Line1) then
+    Dec(Line2);
+  SendToClaude(StringReplace(PromptTemplate(Command), '{ref}', FileRef(Sel.FilePath, Line1, Line2),
+    [rfReplaceAll]), Command <> ecAsk);
+end;
+
+procedure TClaudeCodeWizard.AddToContext(const Files: TArray<string>);
+var
+  Refs, F: string;
+begin
+  Refs := '';
+  for F in Files do
+    if DirectoryExists(F) then
+      Refs := Refs + FileRef(IncludeTrailingPathDelimiter(F), 0, 0) + ' '
+    else
+      Refs := Refs + FileRef(F, 0, 0) + ' ';
+  if Refs <> '' then
+    SendToClaude(Refs, False);
 end;
 
 procedure TClaudeCodeWizard.ExplainStopExecute(Sender: TObject);

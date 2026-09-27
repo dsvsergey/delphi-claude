@@ -21,7 +21,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   // Host <-> page protocol.
   // Page -> host: JSON strings {t:'ready'|'in'|'resize'|'link', ...}
   // Host -> page: 'o' + base64 bytes (terminal output), 'c' + JSON config, 'f' (focus), 'r' (reset),
-  //               'i' + text (simulate typing), 'p' + text (paste, bracketed when the app asks),
+  //               'i' + text (simulate typing), 'p' + text (paste, bracketed when the app asks), 's' + text (paste + Enter),
   //               'd' (dump screen text back as {t:'dump'})
   const host = window.chrome && window.chrome.webview;
   const post = (msg) => { if (host) host.postMessage(JSON.stringify(msg)); };
@@ -103,6 +103,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
         case 'r': term.reset(); break;
         case 'i': term.input(m.substring(1), true); break;
         case 'p': term.paste(m.substring(1)); break;
+        case 's': // paste and submit; Enter a moment later so the app has taken the paste
+          term.paste(m.substring(1));
+          setTimeout(() => term.input('\r', true), 200);
+          break;
         case 'd': {
           const b = term.buffer.active, lines = [];
           for (let i = 0; i < b.length; i++) lines.push(b.getLine(i).translateToString(true));

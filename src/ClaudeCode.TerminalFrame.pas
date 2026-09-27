@@ -47,6 +47,7 @@ type
     FIdleHintShown: Boolean;
     FLinks: TStringList;
     FOnDump: TProc<string>;
+    FSessionDir: string;
     procedure BuildUI;
     function AddButton(const ACaption, AHint: string; AOnClick: TNotifyEvent): TButton;
     procedure LoadPage;
@@ -79,9 +80,11 @@ type
     function SessionRunning: Boolean;
     { Diagnostics/tests: feed input through the terminal page, read back its screen text. }
     procedure InjectInput(const S: string);
-    { Pastes S like Ctrl+V: multi-line text is not submitted line by line. }
-    procedure PasteInput(const S: string);
+    { Pastes S like Ctrl+V: multi-line text is not submitted line by line. Submit presses Enter after it. }
+    procedure PasteInput(const S: string; Submit: Boolean = False);
     procedure RequestDump(const OnDump: TProc<string>);
+    { Working folder of the running session (paths in requests are relative to it). }
+    property SessionDir: string read FSessionDir;
   end;
 
 var
@@ -495,6 +498,7 @@ begin
   try
     FSession.Start(ResolveCommandLine(Cmd), Dir, ClaudeEnvironmentBlock(Info.Port), FCols, FRows);
     FStatus.Caption := Dir;
+    FSessionDir := Dir;
     FStatus.Hint := Cmd;
     FStatus.ShowHint := True;
   except
@@ -535,9 +539,12 @@ begin
   FWeb.PostMessageToPage('i' + S);
 end;
 
-procedure TClaudeTerminalFrame.PasteInput(const S: string);
+procedure TClaudeTerminalFrame.PasteInput(const S: string; Submit: Boolean);
 begin
-  FWeb.PostMessageToPage('p' + S);
+  if Submit then
+    FWeb.PostMessageToPage('s' + S)
+  else
+    FWeb.PostMessageToPage('p' + S);
 end;
 
 procedure TClaudeTerminalFrame.RequestDump(const OnDump: TProc<string>);
