@@ -18,7 +18,7 @@ type
   TClaudeContextMenus = class
   private
     FEditorActions: TActionList;
-    FCommands: TStringList; // editor command of each action, by Tag
+    FCommands: TStringList; // Caption=command of each editor action
     FEditorMenuRegistered: Boolean;
     FProjectNotifier: Integer;
     FMessageNotifier: Integer;
@@ -51,7 +51,7 @@ const
 implementation
 
 uses
-  ClaudeCode.Utils;
+  System.TypInfo, ClaudeCode.Utils;
 
 const
   EDITOR_MENU_CATEGORY = 'ClaudeCode';
@@ -330,7 +330,7 @@ procedure TClaudeContextMenus.CreateEditorMenu;
     A := TAction.Create(FEditorActions);
     A.Caption := Caption;
     A.Category := Category;
-    A.Tag := FCommands.Add(Command);
+    FCommands.Values[Caption] := Command;
     A.OnExecute := EditorActionExecute;
     A.OnUpdate := EditorActionUpdate;
     A.DisableIfNoHandler := False;
@@ -355,18 +355,39 @@ begin
   FEditorMenuRegistered := True;
 end;
 
+{ The editor menu is an ActionBand popup: the handlers may get the IDE's own copy of the
+  action or a menu item as Sender (and the submenu parent is "executed" when it opens),
+  so the command is looked up by the item's caption. }
+function SenderCaption(Sender: TObject): string;
+begin
+  Result := '';
+  if Sender is TCustomAction then
+    Result := TCustomAction(Sender).Caption
+  else if Sender is TMenuItem then
+    Result := TMenuItem(Sender).Caption
+  else if (Sender <> nil) and IsPublishedProp(Sender, 'Caption') then
+    Result := GetStrProp(Sender, 'Caption');
+  Result := StripHotkey(Result);
+end;
+
 procedure TClaudeContextMenus.EditorActionExecute(Sender: TObject);
 var
   Command: string;
 begin
-  Command := FCommands[(Sender as TAction).Tag];
-  if (Command <> '') and Assigned(FOnEditorCommand) then
-    FOnEditorCommand(Command);
+  try
+    Command := FCommands.Values[SenderCaption(Sender)];
+    if (Command <> '') and Assigned(FOnEditorCommand) then
+      FOnEditorCommand(Command);
+  except
+    on E: Exception do
+      Log('Editor menu command failed: ' + E.Message);
+  end;
 end;
 
 procedure TClaudeContextMenus.EditorActionUpdate(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := not Assigned(FHasEditorFile) or FHasEditorFile();
+  if Sender is TCustomAction then
+    TCustomAction(Sender).Enabled := not Assigned(FHasEditorFile) or FHasEditorFile();
 end;
 
 procedure TClaudeContextMenus.FixBuildErrorsClick(Sender: TObject);
