@@ -28,6 +28,8 @@
 | `getDiagnostics` | помилки/попередження Error Insight (LSP) для відкритих файлів |
 | `checkDocumentDirty` / `saveDocument` | стан і збереження буфера редактора |
 | `close_tab` / `closeAllDiffTabs` | закриття вікон diff (і незмінених вкладок) |
+| `buildProject` | збирає проєкт через MSBuild з налаштуваннями `.dproj` (за замовчуванням активні config/platform); повертає помилки, попередження й підказки та показує їх на вкладці **Claude Build** вікна Messages |
+| `getProjectInfo` | група проєктів, активні config/platform, framework, вихідний файл, defines, шляхи пошуку, namespaces, модулі й форми |
 
 Сповіщення від IDE: `selection_changed` (кожні ~300 мс, коли змінюється виділення/курсор)
 та `at_mentioned` (команда «Send Selection to Claude»).
@@ -77,6 +79,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Open Claude Code** (`Ctrl+Shift+Alt+C`): відкриває панель Claude Code і запускає `claude` у теці активного проєкту.
   Claude отримує `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` і підключається до IDE сам.
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
+- **Build and Fix Errors with Claude**: зберігає змінені файли, збирає активний проєкт і, якщо збірка невдала, вставляє помилки в панель Claude як запит (Enter — надіслати).
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
@@ -94,6 +97,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ClaudeCodeIDE.dpk              design-time пакет (rtl, vcl, designide, IndySystem, IndyCore)
 src/ClaudeCode.WebSocket.pas   WebSocket-сервер RFC 6455 на Indy (лише loopback, перевірка токена)
 src/ClaudeCode.Mcp.pas         MCP / JSON-RPC, lock-файл, опис інструментів
+src/ClaudeCode.Build.pas      запуск MSBuild і розбір виводу компілятора
 src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
 src/ClaudeCode.DiffForm.pas    вікно diff
 src/ClaudeCode.Diff.pas        порядковий diff (LCS)
@@ -115,6 +119,7 @@ third_party/                   xterm.js 6.0 (MIT), WebView2Loader 1.0.4191 (BSD,
 cd tests
 dcc32 -B -NSSystem;System.Win;Winapi;Vcl -U../src -NU../dcu/test -E. TestHost.dpr
 TestHost.exe 20        # друкує PORT і TOKEN
+TestHost.exe build     # збирає tests/buildsample через MSBuild (успіх, потім помилка компіляції)
 node protocol-test.mjs <PORT> <TOKEN>
 
 # панель поза IDE (потрібен довірений Claude каталог як робоча тека)
@@ -124,5 +129,6 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 
 ## Обмеження
 
-- `getDiagnostics` повертає дані Error Insight (LSP) для відкритих файлів, а не вивід компілятора з вікна Messages.
+- `getDiagnostics` повертає дані Error Insight (LSP) для відкритих файлів; справжній вивід компілятора дає `buildProject`.
+- `buildProject` компілює файли з диска: незбережені зміни в редакторі повертаються в `unsavedFiles`, якщо не задано `saveModified`.
 - Позиції `character` рахуються за індексом символу в рядку редактора; у рядках із не-ASCII символами можливе незначне зміщення.

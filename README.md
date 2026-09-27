@@ -28,6 +28,8 @@ It uses the same protocol as the VS Code, JetBrains and Neovim integrations:
 | `getDiagnostics` | Error Insight (LSP) errors/warnings for open files |
 | `checkDocumentDirty` / `saveDocument` | editor buffer state and saving |
 | `close_tab` / `closeAllDiffTabs` | closing diff windows (and unmodified tabs) |
+| `buildProject` | builds a project with MSBuild using its `.dproj` settings (active config/platform by default); returns errors, warnings and hints and shows them in the **Claude Build** tab of the Messages window |
+| `getProjectInfo` | project group, active config/platform, framework, output file, defines, search paths, namespaces, units and forms |
 
 Notifications from the IDE: `selection_changed` (every ~300 ms when the selection/cursor changes)
 and `at_mentioned` (the "Send Selection to Claude" command).
@@ -77,6 +79,7 @@ Menu **Tools → Claude Code**:
 - **Open Claude Code** (`Ctrl+Shift+Alt+C`): opens the Claude Code panel and starts `claude` in the active project folder.
   Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
+- **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
@@ -94,6 +97,7 @@ When Claude proposes an edit, a diff window opens:
 ClaudeCodeIDE.dpk                 design-time package (rtl, vcl, designide, IndySystem, IndyCore)
 src/ClaudeCode.WebSocket.pas      RFC 6455 WebSocket server on Indy (loopback only, token check)
 src/ClaudeCode.Mcp.pas            MCP / JSON-RPC, lock file, tool definitions
+src/ClaudeCode.Build.pas          MSBuild runner and compiler output parser
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)
@@ -115,6 +119,7 @@ third_party/                      xterm.js 6.0 (MIT), WebView2Loader 1.0.4191 (B
 cd tests
 dcc32 -B -NSSystem;System.Win;Winapi;Vcl -U../src -NU../dcu/test -E. TestHost.dpr
 TestHost.exe 20        # prints PORT and TOKEN
+TestHost.exe build     # builds tests/buildsample with MSBuild (success, then a compile error)
 node protocol-test.mjs <PORT> <TOKEN>
 
 # the panel outside the IDE (the working folder must be trusted by Claude)
@@ -124,5 +129,6 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 
 ## Limitations
 
-- `getDiagnostics` returns Error Insight (LSP) data for open files, not compiler output from the Messages window.
+- `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.
+- `buildProject` compiles files from disk: unsaved editor changes are reported in `unsavedFiles` unless `saveModified` is set.
 - `character` positions are counted by character index in the editor line; lines with non-ASCII characters may be slightly off.

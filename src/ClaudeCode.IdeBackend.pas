@@ -6,7 +6,7 @@ unit ClaudeCode.IdeBackend;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp;
+  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build;
 
 type
   TSelectionInfo = record
@@ -24,6 +24,7 @@ type
   TDelphiIdeBackend = class(TInterfacedObject, IIdeBackend)
   private
     FLatest: TSelectionInfo;
+    FBuild: TBuildRunner;
     function ToolOpenFile(Args: TJSONObject): TToolResult;
     procedure ToolOpenDiff(Args: TJSONObject; const Done: TToolDone);
     function ToolGetOpenEditors: TToolResult;
@@ -32,7 +33,13 @@ type
     function ToolCheckDocumentDirty(Args: TJSONObject): TToolResult;
     function ToolSaveDocument(Args: TJSONObject): TToolResult;
     function ToolCloseTab(Args: TJSONObject): TToolResult;
+    procedure ToolBuildProject(Args: TJSONObject; const Done: TToolDone);
+    function ToolGetProjectInfo(Args: TJSONObject): TToolResult;
   public
+    constructor Create;
+    destructor Destroy; override;
+    { Stops a running build without answering it; call before the MCP server goes away. }
+    procedure Shutdown;
     { IIdeBackend }
     procedure ExecuteTool(const Name: string; Args: TJSONObject; const Done: TToolDone);
     function WorkspaceFolders: TArray<string>;
@@ -46,6 +53,9 @@ type
 function EditorServices: IOTAEditorServices;
 function ModuleServices: IOTAModuleServices;
 function FindEditBuffer(const FileName: string): IOTAEditBuffer;
+{ A project of the current group by file path, file name or name without extension;
+  the active project when Name is empty. }
+function FindProject(const Name: string): IOTAProject;
 
 implementation
 
@@ -148,6 +158,38 @@ begin
   Result := ModuleServices.MainProjectGroup;
 end;
 
+function FindProject(const Name: string): IOTAProject;
+var
+  G: IOTAProjectGroup;
+  P: IOTAProject;
+  I: Integer;
+  Path: string;
+begin
+  if Trim(Name) = '' then
+    Exit(GetActiveProject);
+  Result := nil;
+  G := ProjectGroup;
+  if G = nil then
+    Exit;
+  if Name.Contains('\') or Name.Contains('/') then
+    Path := PathFromUri(Name)
+  else
+    Path := '';
+  for I := 0 to G.ProjectCount - 1 do
+  begin
+    P := G.Projects[I];
+    if ((Path <> '') and SameFileName(P.FileName, Path)) or
+       SameText(ExtractFileName(P.FileName), Name) or
+       SameText(ChangeFileExt(ExtractFileName(P.FileName), ''), Name) then
+      Exit(P);
+  end;
+end;
+
+function IdeRootDir: string;
+begin
+  Result := IncludeTrailingPathDelimiter((BorlandIDEServices as IOTAServices).GetRootDirectory);
+end;
+
 { TSelectionInfo }
 
 function TSelectionInfo.IsEmpty: Boolean;
@@ -203,6 +245,23 @@ begin
 end;
 
 { TDelphiIdeBackend }
+
+constructor TDelphiIdeBackend.Create;
+begin
+  inherited Create;
+  FBuild := TBuildRunner.Create;
+end;
+
+destructor TDelphiIdeBackend.Destroy;
+begin
+  FBuild.Free;
+  inherited;
+end;
+
+procedure TDelphiIdeBackend.Shutdown;
+begin
+  FBuild.Cancel;
+end;
 
 function TDelphiIdeBackend.IdeName: string;
 begin
@@ -358,6 +417,10 @@ begin
     Done(ToolCloseTab(Args))
   else if Name = 'closeAllDiffTabs' then
     Done(TToolResult.Ok([Format('CLOSED_%d_DIFF_TABS', [CloseAllDiffForms])]))
+  else if Name = 'buildProject' then
+    ToolBuildProject(Args, Done)
+  else if Name = 'getProjectInfo' then
+    Done(ToolGetProjectInfo(Args))
   else
     Done(TToolResult.Error('Unknown tool: ' + Name));
 end;
@@ -662,6 +725,339 @@ begin
       end;
     end;
   Result := TToolResult.Ok(['TAB_CLOSED']);
+end;
+
+{ Build }
+
+const
+  BUILD_MESSAGE_GROUP = 'Claude Build';
+  MAX_BUILD_MESSAGES = 200;
+  OUTPUT_TAIL_LINES = 40;
+
+function BuildSummary(const Req: TBuildRequest; const R: TBuildResult): string;
+var
+  State: string;
+begin
+  if R.Error <> '' then
+    State := 'could not run'
+  else if R.TimedOut then
+    State := 'timed out'
+  else if R.Success then
+    State := 'succeeded'
+  else
+    State := 'FAILED';
+  Result := Format('%s %s (%s, %s) %s: %d error(s), %d warning(s), %d hint(s), %.1f s',
+    [Req.Target, ExtractFileName(Req.ProjectFile), Req.Config, Req.Platform, State,
+     R.Count(bsError) + R.Count(bsFatal), R.Count(bsWarning), R.Count(bsHint), R.ElapsedMs / 1000]);
+end;
+
+procedure ShowBuildInMessages(const Req: TBuildRequest; const R: TBuildResult);
+const
+  Prefix: array[TBuildSeverity] of string = ('Hint', 'Warning', 'Error', 'Fatal');
+var
+  MS: IOTAMessageServices;
+  G: IOTAMessageGroup;
+  M: TBuildMessage;
+  LineRef: Pointer;
+begin
+  if not Supports(BorlandIDEServices, IOTAMessageServices, MS) then
+    Exit;
+  try
+    G := MS.GetGroup(BUILD_MESSAGE_GROUP);
+    if G = nil then
+      G := MS.AddMessageGroup(BUILD_MESSAGE_GROUP);
+    MS.ClearMessageGroup(G);
+    MS.AddTitleMessage(BuildSummary(Req, R), G);
+    if R.Error <> '' then
+      MS.AddTitleMessage(R.Error, G);
+    for M in R.Messages do
+      MS.AddToolMessage(M.FileName, M.Text, Trim(Prefix[M.Severity] + ' ' + M.Code),
+        M.Line, M.Column, nil, LineRef, G);
+  except
+    on E: Exception do
+      Log('Messages view update failed: ' + E.Message);
+  end;
+end;
+
+function OutputTail(const Output: string; Count: Integer): string;
+var
+  L: TStringList;
+  I: Integer;
+begin
+  L := TStringList.Create;
+  try
+    L.Text := Output;
+    Result := '';
+    for I := Max(0, L.Count - Count) to L.Count - 1 do
+      Result := Result + L[I] + sLineBreak;
+  finally
+    L.Free;
+  end;
+end;
+
+function StringsJson(const Items: TArray<string>): TJSONArray;
+var
+  S: string;
+begin
+  Result := TJSONArray.Create;
+  for S in Items do
+    Result.Add(S);
+end;
+
+procedure TDelphiIdeBackend.ToolBuildProject(Args: TJSONObject; const Done: TToolDone);
+var
+  Project: IOTAProject;
+  Req: TBuildRequest;
+  TargetArg, F: string;
+  IncludeHints, SaveModified: Boolean;
+  It: IOTAEditBufferIterator;
+  Module: IOTAModule;
+  I: Integer;
+  Unsaved, Saved: TList<string>;
+  UnsavedArr, SavedArr: TArray<string>;
+  Err: string;
+begin
+  Project := FindProject(JsonStr(Args, 'project'));
+  TargetArg := LowerCase(JsonStr(Args, 'target', 'make'));
+  if FBuild.Busy then
+    Err := 'A build is already running'
+  else if Project = nil then
+    Err := 'Project not found: ' + JsonStr(Args, 'project', '(no active project)')
+  else if not SameText(ExtractFileExt(Project.FileName), '.dproj') then
+    Err := 'Only Delphi .dproj projects can be built: ' + Project.FileName
+  else if TargetArg = 'make' then
+    Req.Target := 'Make'
+  else if TargetArg = 'build' then
+    Req.Target := 'Build'
+  else if TargetArg = 'clean' then
+    Req.Target := 'Clean'
+  else
+    Err := 'target must be "make", "build" or "clean"';
+  if Err <> '' then
+  begin
+    Done(TToolResult.Error(Err));
+    Exit;
+  end;
+  Req.ProjectFile := Project.FileName;
+  Req.Config := JsonStr(Args, 'config', Project.CurrentConfiguration);
+  Req.Platform := JsonStr(Args, 'platform', Project.CurrentPlatform);
+  Req.TimeoutSec := Trunc(StrToFloatDef(JsonStr(Args, 'timeoutSec'), 600, TFormatSettings.Invariant));
+  Req.RsVars := IdeRootDir + 'bin\rsvars.bat';
+  IncludeHints := JsonBool(Args, 'includeHints', True);
+  SaveModified := JsonBool(Args, 'saveModified', False);
+
+  // MSBuild reads files from disk, so unsaved editor changes are not part of the build.
+  Unsaved := TList<string>.Create;
+  Saved := TList<string>.Create;
+  try
+    if EditorServices.GetEditBufferIterator(It) then
+      for I := 0 to It.Count - 1 do
+      begin
+        F := It.EditBuffers[I].FileName;
+        if (F = '') or not It.EditBuffers[I].IsModified then
+          Continue;
+        Module := ModuleServices.FindModule(F);
+        if SaveModified and (Module <> nil) and Module.Save(False, True) then
+          Saved.Add(F)
+        else
+          Unsaved.Add(F);
+      end;
+    UnsavedArr := Unsaved.ToArray;
+    SavedArr := Saved.ToArray;
+  finally
+    Saved.Free;
+    Unsaved.Free;
+  end;
+
+  Log(Format('Build started: %s %s (%s, %s)', [Req.Target, Req.ProjectFile, Req.Config, Req.Platform]));
+  FBuild.Start(Req,
+    procedure(const R: TBuildResult)
+    var
+      Obj: TJSONObject;
+      Msgs: TJSONArray;
+      M: TBuildMessage;
+      Omitted: Integer;
+    begin
+      Log(BuildSummary(Req, R));
+      ShowBuildInMessages(Req, R);
+      Obj := TJSONObject.Create;
+      Obj.AddPair('success', TJSONBool.Create(R.Success));
+      Obj.AddPair('summary', BuildSummary(Req, R));
+      Obj.AddPair('project', Req.ProjectFile);
+      Obj.AddPair('target', Req.Target);
+      Obj.AddPair('config', Req.Config);
+      Obj.AddPair('platform', Req.Platform);
+      Obj.AddPair('exitCode', TJSONNumber.Create(R.ExitCode));
+      if R.TimedOut then
+        Obj.AddPair('timedOut', TJSONBool.Create(True));
+      if R.Error <> '' then
+        Obj.AddPair('error', R.Error);
+      Obj.AddPair('errorCount', TJSONNumber.Create(R.Count(bsError) + R.Count(bsFatal)));
+      Obj.AddPair('warningCount', TJSONNumber.Create(R.Count(bsWarning)));
+      Obj.AddPair('hintCount', TJSONNumber.Create(R.Count(bsHint)));
+      Msgs := TJSONArray.Create;
+      Omitted := 0;
+      for M in R.Messages do
+        if (M.Severity = bsHint) and not IncludeHints then
+          Continue
+        else if Msgs.Count >= MAX_BUILD_MESSAGES then
+          Inc(Omitted)
+        else
+          Msgs.Add(M.ToJson);
+      Obj.AddPair('messages', Msgs);
+      if Omitted > 0 then
+        Obj.AddPair('omittedMessages', TJSONNumber.Create(Omitted));
+      if Length(UnsavedArr) > 0 then
+        Obj.AddPair('unsavedFiles', StringsJson(UnsavedArr));
+      if Length(SavedArr) > 0 then
+        Obj.AddPair('savedFiles', StringsJson(SavedArr));
+      // Without parsed errors the raw output is the only clue why the build failed.
+      if not R.Success and (R.Count(bsError) + R.Count(bsFatal) = 0) and (R.Output <> '') then
+        Obj.AddPair('outputTail', OutputTail(R.Output, OUTPUT_TAIL_LINES));
+      Done(TToolResult.Json(Obj));
+    end);
+end;
+
+{ Project info }
+
+function SplitList(const S: string): TJSONArray;
+var
+  Part: string;
+begin
+  Result := TJSONArray.Create;
+  for Part in S.Split([';']) do
+    if Trim(Part) <> '' then
+      Result.Add(Trim(Part));
+end;
+
+function ModuleTypeName(T: TOTAModuleType): string;
+begin
+  case T of
+    omtForm: Result := 'form';
+    omtDataModule: Result := 'dataModule';
+    omtProjUnit: Result := 'projectUnit';
+    omtUnit: Result := 'unit';
+    omtRc: Result := 'rc';
+    omtAsm: Result := 'asm';
+    omtDef: Result := 'def';
+    omtObj: Result := 'obj';
+    omtRes: Result := 'res';
+    omtLib: Result := 'lib';
+    omtTypeLib: Result := 'typeLib';
+    omtPackageImport: Result := 'packageImport';
+    omtFormResource: Result := 'formResource';
+    omtCustom: Result := 'custom';
+    omtIDL: Result := 'idl';
+  else
+    Result := IntToStr(T);
+  end;
+end;
+
+function ProjectJson(const P: IOTAProject; Detailed: Boolean): TJSONObject;
+const
+  // DCCStrs names; strings keep us independent of that unit.
+  ListValues: array[0..5] of string = ('DCC_Define', 'DCC_UnitSearchPath', 'DCC_Namespace',
+    'DCC_UsePackage', 'DCC_IncludePath', 'DCC_ResourcePath');
+  ScalarValues: array[0..2] of string = ('DCC_ExeOutput', 'DCC_DcuOutput', 'DCC_BplOutput');
+var
+  Configs: IOTAProjectOptionsConfigurations;
+  Active, Cfg: IOTABuildConfiguration;
+  Values, Mod_: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+  S: string;
+  MI: IOTAModuleInfo;
+begin
+  Result := TJSONObject.Create;
+  Result.AddPair('name', ChangeFileExt(ExtractFileName(P.FileName), ''));
+  Result.AddPair('file', P.FileName);
+  Result.AddPair('isActive', TJSONBool.Create(P = GetActiveProject));
+  Result.AddPair('personality', P.Personality);
+  Result.AddPair('projectType', P.ProjectType);
+  Result.AddPair('applicationType', P.ApplicationType);
+  Result.AddPair('frameworkType', P.FrameworkType);
+  Result.AddPair('config', P.CurrentConfiguration);
+  Result.AddPair('platform', P.CurrentPlatform);
+  if not Detailed then
+    Exit;
+
+  Result.AddPair('supportedPlatforms', StringsJson(P.SupportedPlatforms));
+  if P.ProjectOptions <> nil then
+    Result.AddPair('targetFile', P.ProjectOptions.TargetName);
+
+  if Supports(P.ProjectOptions, IOTAProjectOptionsConfigurations, Configs) then
+  begin
+    Arr := TJSONArray.Create;
+    for I := 0 to Configs.ConfigurationCount - 1 do
+      Arr.Add(Configs.Configurations[I].Name);
+    Result.AddPair('configurations', Arr);
+    Active := Configs.ActiveConfiguration;
+    if Active <> nil then
+    begin
+      Cfg := Active.PlatformConfiguration[P.CurrentPlatform];
+      if Cfg = nil then
+        Cfg := Active;
+      Values := TJSONObject.Create;
+      for S in ListValues do
+        Values.AddPair(S, SplitList(Cfg.GetValue(S, True)));
+      for S in ScalarValues do
+        Values.AddPair(S, Cfg.GetValue(S, True));
+      Result.AddPair('options', Values);
+    end;
+  end;
+
+  Arr := TJSONArray.Create;
+  for I := 0 to P.GetModuleCount - 1 do
+  begin
+    MI := P.GetModule(I);
+    if (MI = nil) or (MI.FileName = '') then
+      Continue;
+    Mod_ := TJSONObject.Create;
+    Mod_.AddPair('name', MI.Name);
+    Mod_.AddPair('file', MI.FileName);
+    Mod_.AddPair('type', ModuleTypeName(MI.ModuleType));
+    if MI.FormName <> '' then
+    begin
+      Mod_.AddPair('formName', MI.FormName);
+      Mod_.AddPair('designClass', MI.DesignClass);
+    end;
+    Arr.Add(Mod_);
+  end;
+  Result.AddPair('modules', Arr);
+end;
+
+function TDelphiIdeBackend.ToolGetProjectInfo(Args: TJSONObject): TToolResult;
+var
+  Obj, Ide: TJSONObject;
+  Arr: TJSONArray;
+  G: IOTAProjectGroup;
+  P: IOTAProject;
+  I: Integer;
+begin
+  P := FindProject(JsonStr(Args, 'project'));
+  if P = nil then
+    Exit(TToolResult.Error('Project not found: ' + JsonStr(Args, 'project', '(no active project)')));
+  Obj := TJSONObject.Create;
+  Ide := TJSONObject.Create;
+  Ide.AddPair('product', (BorlandIDEServices as IOTAServices).GetProductIdentifier);
+  Ide.AddPair('rootDir', ExcludeTrailingPathDelimiter(IdeRootDir));
+  {$IFDEF WIN64}
+  Ide.AddPair('bitness', TJSONNumber.Create(64));
+  {$ELSE}
+  Ide.AddPair('bitness', TJSONNumber.Create(32));
+  {$ENDIF}
+  Obj.AddPair('ide', Ide);
+  G := ProjectGroup;
+  if G <> nil then
+  begin
+    Obj.AddPair('projectGroup', G.FileName);
+    Arr := TJSONArray.Create;
+    for I := 0 to G.ProjectCount - 1 do
+      Arr.Add(ProjectJson(G.Projects[I], False));
+    Obj.AddPair('projects', Arr);
+  end;
+  Obj.AddPair('project', ProjectJson(P, True));
+  Result := TToolResult.Json(Obj);
 end;
 
 end.

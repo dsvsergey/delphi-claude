@@ -57,6 +57,8 @@ type
     procedure RestartExecute(Sender: TObject);
     procedure StatusExecute(Sender: TObject);
     procedure SettingsExecute(Sender: TObject);
+    procedure BuildFixExecute(Sender: TObject);
+    procedure BuildFixDone(const R: TToolResult);
   public
     constructor Create;
     destructor Destroy; override;
@@ -109,6 +111,7 @@ begin
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
   DestroyAllDiffForms;
+  FBackend.Shutdown; // a running build must not answer through a freed server
   if FMcp <> nil then
   begin
     FMcp.OnClientsChanged := nil;
@@ -357,6 +360,8 @@ begin
   AddItem(FSendSelAction);
   AddItem(NewAction('ClaudeCodeConsoleAction', 'Open in External Console', '', OpenConsoleExecute));
   AddSeparator;
+  AddItem(NewAction('ClaudeCodeBuildFixAction', 'Build and Fix Errors with Claude', '', BuildFixExecute));
+  AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
   AddItem(NewAction('ClaudeCodeSettingsAction', 'Settings...', '', SettingsExecute));
@@ -488,6 +493,95 @@ begin
   FMcp.Notify('at_mentioned', Params);
   if (ClaudePanelFrame <> nil) and ClaudePanelFrame.SessionRunning then
     ShowClaudePanel;
+end;
+
+procedure TClaudeCodeWizard.BuildFixExecute(Sender: TObject);
+var
+  Frame: TClaudeTerminalFrame;
+  Args: TJSONObject;
+begin
+  Frame := ClaudePanelFrame;
+  if (Frame = nil) or not Frame.SessionRunning then
+  begin
+    ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.');
+    Exit;
+  end;
+  // Like an IDE compile, build what is in the editor.
+  Args := TJSONObject.Create;
+  try
+    Args.AddPair('saveModified', TJSONBool.Create(True));
+    Args.AddPair('includeHints', TJSONBool.Create(False));
+    FBackend.ExecuteTool('buildProject', Args, BuildFixDone);
+  finally
+    Args.Free;
+  end;
+end;
+
+procedure TClaudeCodeWizard.BuildFixDone(const R: TToolResult);
+const
+  MAX_LISTED = 20;
+var
+  V: TJSONValue;
+  Obj, M: TJSONObject;
+  Msgs: TJSONArray;
+  Prompt, Loc, Severity: string;
+  I, Listed: Integer;
+  Frame: TClaudeTerminalFrame;
+begin
+  if R.IsError or (Length(R.Texts) = 0) then
+  begin
+    if Length(R.Texts) > 0 then
+      ShowMessage('Build could not be started: ' + R.Texts[0]);
+    Exit;
+  end;
+  V := TJSONObject.ParseJSONValue(R.Texts[0]);
+  try
+    if not (V is TJSONObject) then
+      Exit;
+    Obj := TJSONObject(V);
+    if JsonBool(Obj, 'success', False) then
+    begin
+      ShowMessage(JsonStr(Obj, 'summary'));
+      Exit;
+    end;
+    Prompt := 'The build failed: ' + JsonStr(Obj, 'summary') + #10;
+    Listed := 0;
+    if Obj.GetValue('messages') is TJSONArray then
+    begin
+      Msgs := TJSONArray(Obj.GetValue('messages'));
+      for I := 0 to Msgs.Count - 1 do
+      begin
+        if not (Msgs.Items[I] is TJSONObject) then
+          Continue;
+        M := TJSONObject(Msgs.Items[I]);
+        Severity := JsonStr(M, 'severity');
+        if (Severity <> 'error') and (Severity <> 'fatal') then
+          Continue;
+        if Listed = MAX_LISTED then
+        begin
+          Prompt := Prompt + '...' + #10;
+          Break;
+        end;
+        Loc := JsonStr(M, 'file');
+        if JsonStr(M, 'line') <> '' then
+          Loc := Loc + '(' + JsonStr(M, 'line') + ')';
+        Prompt := Prompt + Trim(Loc + ': ' + JsonStr(M, 'code') + ' ' + JsonStr(M, 'message')) + #10;
+        Inc(Listed);
+      end;
+    end;
+    if (Listed = 0) and (JsonStr(Obj, 'outputTail') <> '') then
+      Prompt := Prompt + 'Build output:' + #10 + JsonStr(Obj, 'outputTail') + #10;
+    Prompt := Prompt + 'Fix these errors, then call the buildProject tool to verify the build.';
+  finally
+    V.Free;
+  end;
+  Frame := ShowClaudePanel;
+  if (Frame <> nil) and Frame.SessionRunning then
+  begin
+    // Pasted, not submitted: the user can edit the request and press Enter.
+    Frame.PasteInput(Prompt);
+    Frame.FocusTerminal;
+  end;
 end;
 
 procedure TClaudeCodeWizard.RestartExecute(Sender: TObject);

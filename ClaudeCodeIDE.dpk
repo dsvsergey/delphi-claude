@@ -41,6 +41,7 @@ contains
   ClaudeCode.WebSocket in 'src\ClaudeCode.WebSocket.pas',
   ClaudeCode.Diff in 'src\ClaudeCode.Diff.pas',
   ClaudeCode.Mcp in 'src\ClaudeCode.Mcp.pas',
+  ClaudeCode.Build in 'src\ClaudeCode.Build.pas',
   ClaudeCode.DiffForm in 'src\ClaudeCode.DiffForm.pas',
   ClaudeCode.IdeBackend in 'src\ClaudeCode.IdeBackend.pas',
   ClaudeCode.Launcher in 'src\ClaudeCode.Launcher.pas',

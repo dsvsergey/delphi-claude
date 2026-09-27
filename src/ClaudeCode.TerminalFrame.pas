@@ -78,6 +78,8 @@ type
     function SessionRunning: Boolean;
     { Diagnostics/tests: feed input through the terminal page, read back its screen text. }
     procedure InjectInput(const S: string);
+    { Pastes S like Ctrl+V: multi-line text is not submitted line by line. }
+    procedure PasteInput(const S: string);
     procedure RequestDump(const OnDump: TProc<string>);
   end;
 
@@ -530,6 +532,11 @@ end;
 procedure TClaudeTerminalFrame.InjectInput(const S: string);
 begin
   FWeb.PostMessageToPage('i' + S);
+end;
+
+procedure TClaudeTerminalFrame.PasteInput(const S: string);
+begin
+  FWeb.PostMessageToPage('p' + S);
 end;
 
 procedure TClaudeTerminalFrame.RequestDump(const OnDump: TProc<string>);
