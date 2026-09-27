@@ -457,6 +457,7 @@ end;
 procedure TClaudeCodeWizard.OpenClaudeExecute(Sender: TObject);
 var
   Frame: TClaudeTerminalFrame;
+  View: TClaudeSessionView;
 begin
   Frame := ShowClaudePanel;
   if Frame = nil then
@@ -465,8 +466,12 @@ begin
       'Use Tools > Claude Code > Open in External Console.');
     Exit;
   end;
-  if not Frame.SessionRunning then
-    Frame.StartSession;
+  // One tab per project folder: switch to it, or take an unused tab, or open a new one.
+  View := Frame.ViewFor(WorkDir);
+  if not View.SessionRunning then
+    View.StartSession
+  else
+    View.FocusTerminal;
 end;
 
 procedure TClaudeCodeWizard.OpenConsoleExecute(Sender: TObject);
@@ -521,6 +526,21 @@ begin
   if not Sel.Valid then
   begin
     ShowMessage('No active editor.');
+    Exit;
+  end;
+  // With sessions in the panel, only the active tab gets the reference (at_mentioned would go
+  // to every connected session).
+  Frame := ClaudePanelFrame;
+  if (Frame <> nil) and Frame.SessionRunning then
+  begin
+    LastLine := Sel.EndLine + 1;
+    if (Sel.EndChar = 0) and (LastLine > Sel.StartLine + 1) then
+      Dec(LastLine);
+    if Sel.IsEmpty then
+      Prompt := FileRef(Sel.FilePath, 0, 0)
+    else
+      Prompt := FileRef(Sel.FilePath, Sel.StartLine + 1, LastLine);
+    SendToClaude(Prompt + ' ', False);
     Exit;
   end;
   if FMcp.ClientCount = 0 then

@@ -66,8 +66,10 @@ The panel works the same way as the VS Code integrated terminal:
 - xterm.js, the terminal page and `WebView2Loader.dll` are embedded in the BPL as resources, nothing else to copy.
   Only the Microsoft Edge WebView2 Runtime is required (included in Windows 11).
 
-Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**.
+Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**, **+** (new tab), **x** (close tab).
 After a session ends, pressing Enter in the panel starts a new one.
+
+**Tabs.** Each tab is a separate Claude Code session. **Open Claude Code** switches to the tab of the active project's folder (or opens one); **+** opens a new tab for the current project, **x** or a middle-click closes a tab (and stops its session). A tab shows `●` while Claude works and `!` when it waits for you; the toolbar buttons and **Send Selection** / context menu requests act on the active tab.
 
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
