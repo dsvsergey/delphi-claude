@@ -316,6 +316,10 @@ var
   D: TDiffLines;
   S: string;
   L: TDiffLine;
+  Hunks: TArray<THunk>;
+  Pairs: TArray<Integer>;
+  Accepted: TArray<Boolean>;
+  InA, InB: TInlineRange;
 begin
   D := ComputeLineDiff(SplitLines('a'#13#10'b'#13#10'c'#13#10'd'), SplitLines('a'#10'x'#10'c'#10'd'#10'e'#10));
   S := '';
@@ -327,6 +331,23 @@ begin
     end;
   if S <> ' a-b+x c d+e' then
     raise Exception.Create('Diff self-test failed: ' + S);
+
+  // Hunks, pairing, partial application and in-line change.
+  Hunks := FindHunks(D);
+  Expect(Length(Hunks) = 2, 'two hunks');
+  Pairs := PairLines(D, Hunks);
+  Expect((Pairs[1] = 2) and (Pairs[2] = 1) and (Pairs[5] = -1), 'b/x paired, e alone');
+  Accepted := [True, True];
+  Expect(ApplyHunks(D, Hunks, Accepted, #10, True) = 'a'#10'x'#10'c'#10'd'#10'e'#10, 'all hunks');
+  Accepted := [False, True];
+  Expect(ApplyHunks(D, Hunks, Accepted, #13#10, False) = 'a'#13#10'b'#13#10'c'#13#10'd'#13#10'e',
+    'first hunk skipped');
+  Accepted := [True, False];
+  Expect(ApplyHunks(D, Hunks, Accepted, #10, True) = 'a'#10'x'#10'c'#10'd'#10, 'second hunk skipped');
+  InlineChange('Result := Foo(1);', 'Result := Bar(1);', InA, InB);
+  Expect((InA.Start = 11) and (InA.Len = 3) and (InB.Start = 11) and (InB.Len = 3), 'in-line change');
+  InlineChange('abc', 'abXYc', InA, InB);
+  Expect((InA.Start = 3) and (InA.Len = 0) and (InB.Start = 3) and (InB.Len = 2), 'in-line insertion');
   Writeln('DIFF OK');
 end;
 

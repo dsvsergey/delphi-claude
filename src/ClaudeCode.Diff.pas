@@ -5,7 +5,7 @@ unit ClaudeCode.Diff;
 interface
 
 uses
-  System.SysUtils, System.Generics.Collections;
+  System.SysUtils, System.Math, System.Generics.Collections;
 
 type
   TDiffKind = (dkEqual, dkDelete, dkInsert);
@@ -19,9 +19,29 @@ type
 
   TDiffLines = TArray<TDiffLine>;
 
+  { A run of changed lines: Diff[First..Last] are all deletes/inserts. }
+  THunk = record
+    First, Last: Integer;
+  end;
+
+  { The changed part of a line compared with its counterpart: Start is 1-based, Len may be 0. }
+  TInlineRange = record
+    Start, Len: Integer;
+  end;
+
 function SplitLines(const S: string): TArray<string>;
 function ComputeLineDiff(const OldLines, NewLines: TArray<string>): TDiffLines;
 procedure CountChanges(const Diff: TDiffLines; out Added, Removed: Integer);
+
+function FindHunks(const Diff: TDiffLines): TArray<THunk>;
+{ For each line of a hunk, the index of the line it replaces/is replaced by (k-th deleted line
+  with k-th inserted line of the same hunk), or -1. }
+function PairLines(const Diff: TDiffLines; const Hunks: TArray<THunk>): TArray<Integer>;
+{ The text with only the Accepted hunks applied; rejected hunks keep the old lines. }
+function ApplyHunks(const Diff: TDiffLines; const Hunks: TArray<THunk>; const Accepted: TArray<Boolean>;
+  const LineBreak: string; TrailingBreak: Boolean): string;
+{ The differing middle of A and B (common prefix and suffix removed). }
+procedure InlineChange(const A, B: string; out InA, InB: TInlineRange);
 
 implementation
 
@@ -191,6 +211,122 @@ begin
       dkInsert: Inc(Added);
       dkDelete: Inc(Removed);
     end;
+end;
+
+function FindHunks(const Diff: TDiffLines): TArray<THunk>;
+var
+  L: TList<THunk>;
+  H: THunk;
+  I: Integer;
+begin
+  L := TList<THunk>.Create;
+  try
+    I := 0;
+    while I <= High(Diff) do
+    begin
+      if Diff[I].Kind = dkEqual then
+      begin
+        Inc(I);
+        Continue;
+      end;
+      H.First := I;
+      while (I <= High(Diff)) and (Diff[I].Kind <> dkEqual) do
+        Inc(I);
+      H.Last := I - 1;
+      L.Add(H);
+    end;
+    Result := L.ToArray;
+  finally
+    L.Free;
+  end;
+end;
+
+function PairLines(const Diff: TDiffLines; const Hunks: TArray<THunk>): TArray<Integer>;
+var
+  H: THunk;
+  Dels, Ins: TList<Integer>;
+  I: Integer;
+begin
+  SetLength(Result, Length(Diff));
+  for I := 0 to High(Result) do
+    Result[I] := -1;
+  Dels := TList<Integer>.Create;
+  Ins := TList<Integer>.Create;
+  try
+    for H in Hunks do
+    begin
+      Dels.Clear;
+      Ins.Clear;
+      for I := H.First to H.Last do
+        if Diff[I].Kind = dkDelete then
+          Dels.Add(I)
+        else
+          Ins.Add(I);
+      for I := 0 to Min(Dels.Count, Ins.Count) - 1 do
+      begin
+        Result[Dels[I]] := Ins[I];
+        Result[Ins[I]] := Dels[I];
+      end;
+    end;
+  finally
+    Ins.Free;
+    Dels.Free;
+  end;
+end;
+
+function ApplyHunks(const Diff: TDiffLines; const Hunks: TArray<THunk>; const Accepted: TArray<Boolean>;
+  const LineBreak: string; TrailingBreak: Boolean): string;
+var
+  Keep: TArray<Boolean>;
+  SB: TStringBuilder;
+  I, H: Integer;
+  First: Boolean;
+begin
+  // Equal lines stay; in an accepted hunk the inserts stay, in a rejected one the deletes.
+  SetLength(Keep, Length(Diff));
+  for I := 0 to High(Diff) do
+    Keep[I] := Diff[I].Kind = dkEqual;
+  for H := 0 to High(Hunks) do
+    for I := Hunks[H].First to Hunks[H].Last do
+      if (H <= High(Accepted)) and Accepted[H] then
+        Keep[I] := Diff[I].Kind = dkInsert
+      else
+        Keep[I] := Diff[I].Kind = dkDelete;
+  SB := TStringBuilder.Create;
+  try
+    First := True;
+    for I := 0 to High(Diff) do
+      if Keep[I] then
+      begin
+        if not First then
+          SB.Append(LineBreak);
+        SB.Append(Diff[I].Text);
+        First := False;
+      end;
+    if TrailingBreak and not First then
+      SB.Append(LineBreak);
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
+procedure InlineChange(const A, B: string; out InA, InB: TInlineRange);
+var
+  Pre, Suf, LA, LB: Integer;
+begin
+  LA := Length(A);
+  LB := Length(B);
+  Pre := 0;
+  while (Pre < LA) and (Pre < LB) and (A[Pre + 1] = B[Pre + 1]) do
+    Inc(Pre);
+  Suf := 0;
+  while (Suf < LA - Pre) and (Suf < LB - Pre) and (A[LA - Suf] = B[LB - Suf]) do
+    Inc(Suf);
+  InA.Start := Pre + 1;
+  InA.Len := LA - Pre - Suf;
+  InB.Start := Pre + 1;
+  InB.Len := LB - Pre - Suf;
 end;
 
 end.
