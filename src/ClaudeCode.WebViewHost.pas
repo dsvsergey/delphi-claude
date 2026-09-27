@@ -74,7 +74,7 @@ function ClaudeCodeDataDir: string;
 implementation
 
 uses
-  Winapi.ActiveX, System.IOUtils, System.Types, Vcl.Graphics;
+  Winapi.ActiveX, System.IOUtils, System.Types, System.JSON, Vcl.Graphics;
 
 const
   COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC_ = 0;
@@ -196,6 +196,14 @@ function TMessageReceived.Invoke(const sender: ICoreWebView2;
 var
   P: PWideChar;
   S: string;
+  Args2: ICoreWebView2WebMessageReceivedEventArgs2;
+  Objects: ICoreWebView2ObjectCollectionView;
+  Count: SYSUINT;
+  I: Integer;
+  Obj: IUnknown;
+  F: ICoreWebView2File;
+  Msg: TJSONObject;
+  Paths: TJSONArray;
 begin
   Result := S_OK;
   if (FHost = nil) or not Assigned(FHost.FOnMessage) then
@@ -205,6 +213,32 @@ begin
   begin
     S := P;
     CoTaskMemFree(P);
+    // Files dropped on the page arrive as additional objects; hand their paths over as
+    // {"t":"files","paths":[...]} (the page only sees file names).
+    if Supports(args, ICoreWebView2WebMessageReceivedEventArgs2, Args2) and
+       Succeeded(Args2.Get_additionalObjects(Objects)) and (Objects <> nil) and
+       Succeeded(Objects.Get_Count(Count)) and (Count > 0) then
+    begin
+      Msg := TJSONObject.Create;
+      try
+        Paths := TJSONArray.Create;
+        Msg.AddPair('t', 'files');
+        Msg.AddPair('paths', Paths);
+        for I := 0 to Integer(Count) - 1 do
+          if Succeeded(Objects.GetValueAtIndex(I, Obj)) and Supports(Obj, ICoreWebView2File, F) then
+          begin
+            P := nil;
+            if Succeeded(F.Get_Path(P)) and (P <> nil) then
+            begin
+              Paths.Add(string(P));
+              CoTaskMemFree(P);
+            end;
+          end;
+        S := Msg.ToJSON;
+      finally
+        Msg.Free;
+      end;
+    end;
     FHost.FOnMessage(FHost, S);
   end;
 end;

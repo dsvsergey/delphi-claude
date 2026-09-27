@@ -48,6 +48,11 @@ type
     FLinks: TStringList;
     FOnDump: TProc<string>;
     FSessionDir: string;
+    FTitle: string;         // terminal title set by Claude
+    FProgress: Boolean;     // OSC 9;4 progress is showing
+    FBusy: Boolean;         // Claude is working on a turn
+    FAttention: Boolean;    // Claude asked for the user (bell / notification) since the last key
+    FCaptionMarked: Boolean;
     procedure BuildUI;
     function AddButton(const ACaption, AHint: string; AOnClick: TNotifyEvent): TButton;
     procedure LoadPage;
@@ -63,6 +68,12 @@ type
     procedure SendConfig;
     procedure DoStart(const Args: string);
     procedure ShowIdleHint;
+    procedure UpdateActivity;
+    procedure UpdateStatus;
+    procedure AlertUser;
+    procedure ClearAlert;
+    procedure PasteFromClipboard;
+    procedure PastePaths(const Paths: TArray<string>);
     procedure NewClick(Sender: TObject);
     procedure ContinueClick(Sender: TObject);
     procedure ResumeClick(Sender: TObject);
@@ -102,7 +113,8 @@ implementation
 {$ENDIF}
 
 uses
-  Winapi.ShellAPI, System.JSON, System.Types, System.StrUtils, Vcl.Clipbrd,
+  Winapi.ShellAPI, System.JSON, System.Types, System.StrUtils, System.IOUtils, Vcl.Clipbrd,
+  Vcl.Imaging.pngimage,
   ClaudeCode.Launcher;
 
 function LoadTextResource(const Name: string): string;
@@ -310,6 +322,9 @@ var
   V: TJSONValue;
   O: TJSONObject;
   T, S: string;
+  Arr: TJSONArray;
+  I: Integer;
+  Files: TArray<string>;
 begin
   V := TJSONObject.ParseJSONValue(Msg);
   try
@@ -320,6 +335,12 @@ begin
     if T = 'in' then
     begin
       S := O.GetValue<string>('d', '');
+      if FAttention then
+      begin
+        FAttention := False;
+        ClearAlert;
+        UpdateStatus;
+      end;
       if SessionRunning then
         FSession.WriteText(S)
       else if Pos(#13, S) > 0 then
@@ -341,6 +362,33 @@ begin
     end
     else if T = 'copy' then
       Clipboard.AsText := O.GetValue<string>('text', '')
+    else if T = 'pasteKey' then
+      PasteFromClipboard
+    else if T = 'files' then
+    begin
+      Arr := O.GetValue('paths') as TJSONArray;
+      if Arr <> nil then
+        for I := 0 to Arr.Count - 1 do
+          Files := Files + [Arr.Items[I].Value];
+      PastePaths(Files);
+    end
+    else if T = 'title' then
+    begin
+      FTitle := O.GetValue<string>('title', '');
+      UpdateActivity;
+    end
+    else if T = 'progress' then
+    begin
+      // Windows Terminal progress states: 1 = value, 3 = indeterminate; 0 = none.
+      FProgress := O.GetValue<Integer>('state', 0) in [1, 3];
+      UpdateActivity;
+    end
+    else if T = 'attention' then
+    begin
+      FAttention := True;
+      AlertUser;
+      UpdateStatus;
+    end
     else if T = 'link' then
     begin
       // Open outside the WebView2 callback.
@@ -450,8 +498,192 @@ begin
   SendBytes(Data);
 end;
 
+{ Claude animates a spinner at the start of the title while it works (braille dots U+2800..U+28FF or
+  the U+00B7, U+2722, U+2736, U+273B, U+273D glyphs); the idle title starts with U+2733. }
+function TitleShowsSpinner(const Title: string): Boolean;
+var
+  C: Char;
+begin
+  if Title = '' then
+    Exit(False);
+  C := Title[1];
+  Result := ((Ord(C) >= $2800) and (Ord(C) <= $28FF)) or
+    (C = #$00B7) or (C = #$2722) or (C = #$2736) or (C = #$273B) or (C = #$273D);
+end;
+
+function TitleText(const Title: string): string;
+begin
+  // Without the leading status glyph.
+  Result := Title;
+  if (Result <> '') and (Ord(Result[1]) > $7F) then
+    Result := TrimLeft(Copy(Result, 2, MaxInt));
+end;
+
+procedure TClaudeTerminalFrame.UpdateActivity;
+var
+  WasBusy: Boolean;
+begin
+  WasBusy := FBusy;
+  FBusy := FProgress or TitleShowsSpinner(FTitle);
+  if WasBusy and not FBusy then
+    AlertUser; // a turn finished
+  UpdateStatus;
+end;
+
+procedure TClaudeTerminalFrame.UpdateStatus;
+var
+  State, Detail: string;
+begin
+  if not SessionRunning then
+    Exit;
+  if FAttention then
+    State := 'Waiting for you'
+  else if FBusy then
+    State := 'Working...'
+  else
+    State := 'Ready';
+  Detail := TitleText(FTitle);
+  if Detail = '' then
+    Detail := FSessionDir;
+  FStatus.Caption := State + '   ' + Detail;
+end;
+
+{ Tells the user Claude needs them when they are not looking at the panel: the IDE flashes
+  on the taskbar and the panel's caption gets a marker. }
+procedure TClaudeTerminalFrame.AlertUser;
+var
+  Info: TFlashWInfo;
+  Form: TCustomForm;
+begin
+  if Application.Active and Showing then
+    Exit;
+  if not Application.Active and (Application.MainFormHandle <> 0) then
+  begin
+    Info.cbSize := SizeOf(Info);
+    Info.hwnd := Application.MainFormHandle;
+    Info.dwFlags := FLASHW_TRAY or FLASHW_TIMERNOFG;
+    Info.uCount := 0;
+    Info.dwTimeout := 0;
+    FlashWindowEx(Info);
+  end;
+  Form := GetParentForm(Self);
+  if (Form <> nil) and not FCaptionMarked then
+  begin
+    Form.Caption := Form.Caption + ' *';
+    FCaptionMarked := True;
+  end;
+end;
+
+procedure TClaudeTerminalFrame.ClearAlert;
+var
+  Form: TCustomForm;
+  S: string;
+begin
+  if not FCaptionMarked then
+    Exit;
+  FCaptionMarked := False;
+  Form := GetParentForm(Self);
+  if Form <> nil then
+  begin
+    S := Form.Caption;
+    if S.EndsWith(' *') then
+      Form.Caption := Copy(S, 1, Length(S) - 2);
+  end;
+end;
+
+{ Paths for Claude's prompt, relative to the session folder when inside it: images as plain
+  paths (Claude Code attaches them), other files as @-mentions, quoted when they contain spaces. }
+procedure TClaudeTerminalFrame.PastePaths(const Paths: TArray<string>);
+const
+  ImageExts: array[0..5] of string = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp');
+var
+  Text, P, S, Base, Ext: string;
+  IsImage: Boolean;
+begin
+  Text := '';
+  Base := '';
+  if FSessionDir <> '' then
+    Base := IncludeTrailingPathDelimiter(FSessionDir);
+  for P in Paths do
+  begin
+    Ext := LowerCase(ExtractFileExt(P));
+    IsImage := MatchStr(Ext, ImageExts);
+    if IsImage then
+      S := P // absolute: Claude Code recognises image paths
+    else if (Base <> '') and SameText(Copy(P, 1, Length(Base)), Base) then
+      S := StringReplace(Copy(P, Length(Base) + 1, MaxInt), '\', '/', [rfReplaceAll])
+    else
+      S := StringReplace(P, '\', '/', [rfReplaceAll]);
+    if DirectoryExists(P) and not S.EndsWith('/') then
+      S := S + '/';
+    if S.Contains(' ') then
+      S := '"' + S + '"';
+    if not IsImage then
+      S := '@' + S;
+    Text := Text + S + ' ';
+  end;
+  if Text <> '' then
+    PasteInput(Text);
+end;
+
+procedure TClaudeTerminalFrame.PasteFromClipboard;
+var
+  Drop: THandle;
+  Count, I: Integer;
+  Buf: array[0..MAX_PATH] of Char;
+  Files: TArray<string>;
+  Bmp: TBitmap;
+  Png: TPngImage;
+  Dir, FileName: string;
+begin
+  try
+    if Clipboard.HasFormat(CF_HDROP) then
+    begin
+      // Files copied in Explorer.
+      Clipboard.Open;
+      try
+        Drop := Clipboard.GetAsHandle(CF_HDROP);
+        Count := DragQueryFile(Drop, $FFFFFFFF, nil, 0);
+        for I := 0 to Count - 1 do
+          if DragQueryFile(Drop, I, Buf, Length(Buf)) > 0 then
+            Files := Files + [string(Buf)];
+      finally
+        Clipboard.Close;
+      end;
+      PastePaths(Files);
+    end
+    else if Clipboard.HasFormat(CF_BITMAP) and not Clipboard.HasFormat(CF_UNICODETEXT) then
+    begin
+      // A screenshot or copied picture: save it and give Claude the file.
+      Dir := TPath.Combine(TPath.GetTempPath, 'claude-delphi');
+      ForceDirectories(Dir);
+      FileName := TPath.Combine(Dir, 'clipboard-' + FormatDateTime('yyyymmdd-hhnnsszzz', Now) + '.png');
+      Bmp := TBitmap.Create;
+      Png := TPngImage.Create;
+      try
+        Bmp.Assign(Clipboard);
+        Png.Assign(Bmp);
+        Png.SaveToFile(FileName);
+      finally
+        Png.Free;
+        Bmp.Free;
+      end;
+      PastePaths([FileName]);
+    end
+    else if Clipboard.HasFormat(CF_UNICODETEXT) then
+      PasteInput(Clipboard.AsText);
+  except
+    on E: Exception do
+      WriteLocal(#13#10#27'[31mPaste failed: ' + E.Message + #27'[0m'#13#10);
+  end;
+end;
+
 procedure TClaudeTerminalFrame.SessionExit(ExitCode: Cardinal);
 begin
+  FBusy := False;
+  FProgress := False;
+  FAttention := False;
+  ClearAlert;
   WriteLocal(#13#10#27'[90m[Claude Code exited with code ' + IntToStr(Integer(ExitCode)) +
     '. Press Enter to start a new session.]'#27'[0m'#13#10);
   FStatus.Caption := 'Not running';
@@ -499,6 +731,11 @@ begin
     FSession.Start(ResolveCommandLine(Cmd), Dir, ClaudeEnvironmentBlock(Info.Port), FCols, FRows);
     FStatus.Caption := Dir;
     FSessionDir := Dir;
+    FTitle := '';
+    FBusy := False;
+    FProgress := False;
+    FAttention := False;
+    UpdateStatus;
     FStatus.Hint := Cmd;
     FStatus.ShowHint := True;
   except
@@ -526,6 +763,7 @@ end;
 
 procedure TClaudeTerminalFrame.FocusTerminal;
 begin
+  ClearAlert;
   if FWeb.Visible and FWeb.CanFocus then
   begin
     FWeb.SetFocus;

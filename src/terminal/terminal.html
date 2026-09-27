@@ -19,7 +19,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
 (function () {
   'use strict';
   // Host <-> page protocol.
-  // Page -> host: JSON strings {t:'ready'|'in'|'resize'|'link', ...}
+  // Page -> host: JSON strings {t:'ready'|'in'|'resize'|'link'|'copy'|'dump'|'title'|'progress'|'attention', ...}
   // Host -> page: 'o' + base64 bytes (terminal output), 'c' + JSON config, 'f' (focus), 'r' (reset),
   //               'i' + text (simulate typing), 'p' + text (paste, bracketed when the app asks), 's' + text (paste + Enter),
   //               'd' (dump screen text back as {t:'dump'})
@@ -56,8 +56,41 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
       return false;
     }
     if ((e.ctrlKey && !e.altKey && e.code === 'KeyV') || (e.shiftKey && e.code === 'Insert')) {
+      // The host reads the clipboard: text is pasted back ('p'), an image is saved to a file
+      // and copied files are pasted as paths.
+      e.preventDefault();
+      post({ t: 'pasteKey' });
       return false;
     }
+    return true;
+  });
+
+  // Files dropped on the terminal: the host gets their paths through additional objects.
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length && host && host.postMessageWithAdditionalObjects)
+      host.postMessageWithAdditionalObjects(JSON.stringify({ t: 'drop' }), files);
+    else if (e.dataTransfer && e.dataTransfer.getData('text'))
+      term.paste(e.dataTransfer.getData('text'));
+  });
+
+  // Session state for the host: the title (Claude animates a spinner in it while working),
+  // progress (OSC 9;4) and requests for attention (bell, OSC 9 / OSC 777 notifications).
+  term.onTitleChange((title) => post({ t: 'title', title }));
+  term.onBell(() => post({ t: 'attention', text: '' }));
+  term.parser.registerOscHandler(9, (data) => {
+    if (data.startsWith('4;')) post({ t: 'progress', state: parseInt(data.split(';')[1] || '0', 10) || 0 });
+    else post({ t: 'attention', text: data });
+    return true;
+  });
+  term.parser.registerOscHandler(777, (data) => {
+    const parts = data.split(';'); // notify;title;body
+    post({ t: 'attention', text: parts.slice(2).join(';') || parts[1] || '' });
     return true;
   });
 
