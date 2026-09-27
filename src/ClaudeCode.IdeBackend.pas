@@ -65,7 +65,7 @@ implementation
 
 uses
   System.Generics.Collections, System.Generics.Defaults, System.Math, Vcl.Forms,
-  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync;
+  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools;
 
 const
   MAX_SELECTION_BYTES = 2 * 1024 * 1024;
@@ -431,6 +431,18 @@ begin
     ToolBuildProject(Args, Done)
   else if Name = 'getProjectInfo' then
     Done(ToolGetProjectInfo(Args))
+  else if Name = 'getFormComponents' then
+    Done(ToolGetFormComponents(Args))
+  else if Name = 'getSelectedComponents' then
+    Done(ToolGetSelectedComponents(Args))
+  else if Name = 'setComponentProperties' then
+    Done(ToolSetComponentProperties(Args))
+  else if Name = 'createComponent' then
+    Done(ToolCreateComponent(Args))
+  else if Name = 'deleteComponent' then
+    Done(ToolDeleteComponent(Args))
+  else if Name = 'captureForm' then
+    Done(ToolCaptureForm(Args))
   else
     Done(TToolResult.Error('Unknown tool: ' + Name));
 end;

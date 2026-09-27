@@ -28,11 +28,31 @@
 | `getDiagnostics` | помилки/попередження Error Insight (LSP) для відкритих файлів |
 | `checkDocumentDirty` / `saveDocument` | стан і збереження буфера редактора |
 | `close_tab` / `closeAllDiffTabs` | закриття вікон diff (і незмінених вкладок) |
-| `buildProject` | збирає проєкт через MSBuild з налаштуваннями `.dproj` (за замовчуванням активні config/platform); повертає помилки, попередження й підказки та показує їх на вкладці **Claude Build** вікна Messages |
-| `getProjectInfo` | група проєктів, активні config/platform, framework, вихідний файл, defines, шляхи пошуку, namespaces, модулі й форми |
 
 Сповіщення від IDE: `selection_changed` (кожні ~300 мс, коли змінюється виділення/курсор)
 та `at_mentioned` (команда «Send Selection to Claude»).
+
+### Delphi-інструменти для Claude (MCP-сервер `delphi`)
+
+Claude Code використовує IDE-з'єднання сам і з нього показує моделі лише `getDiagnostics`,
+тому Delphi-інструменти надаються другим MCP-сервером **`delphi`** (Streamable HTTP,
+`POST http://127.0.0.1:<port>/mcp`, той самий токен у заголовку Bearer). Панель і
+**Open in External Console** запускають Claude з `--mcp-config`, що вказує на нього: інструменти
+видно як `mcp__delphi__*`, і Claude питає дозвіл на їх використання, як для будь-якого MCP-інструмента.
+
+| Інструмент | Що робить |
+|---|---|
+| `buildProject` | збирає проєкт через MSBuild з налаштуваннями `.dproj` (за замовчуванням активні config/platform); повертає помилки, попередження й підказки та показує їх на вкладці **Claude Build** вікна Messages |
+| `getProjectInfo` | група проєктів, активні config/platform, framework, вихідний файл, defines, шляхи пошуку, namespaces, модулі й форми |
+| `getFormComponents` | форма в дизайнері зараз (з незбереженими змінами): компоненти і DFM-текст, або DFM-блок одного компонента |
+| `getSelectedComponents` | компоненти, виділені в дизайнері, з їхніми DFM-блоками |
+| `setComponentProperties` | змінює властивості через дизайнер: вкладені (`Font.Size`), enum/set, ідентифікатори на кшталт `clRed`, посилання на компоненти, `Items`/`Lines`, обробники подій (створюються, якщо їх немає); повертає старі/нові значення |
+| `createComponent` / `deleteComponent` | кладе на форму зареєстрований компонент (ім'я, батько, розміри, властивості) / видаляє компонент |
+| `captureForm` | PNG VCL-форми або контролу, як вони виглядають у дизайнері; Claude відкриває його інструментом Read |
+
+Зміни в дизайнері не зберігаються автоматично: перегляньте їх в IDE і збережіть або відкотіть форму.
+`claude`, запущений поза IDE, може використати інструменти останньої запущеної IDE:
+`claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
 ## Панель Claude Code
 
@@ -80,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   Claude отримує `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` і підключається до IDE сам.
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
 - **Build and Fix Errors with Claude**: зберігає змінені файли, збирає активний проєкт і, якщо збірка невдала, вставляє помилки в панель Claude як запит (Enter — надіслати).
-- **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента.
+- **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
 - **Settings…**: команда для панелі (типово `claude`; наприклад `claude --model opus`), для зовнішньої консолі (типово `cmd.exe /k claude`) і чи застосовувати зміни файлів від Claude до відкритих редакторів (`1`/`0`).
@@ -109,10 +129,12 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 ClaudeCodeIDE.dpk              design-time пакет (rtl, vcl, designide, IndySystem, IndyCore)
 src/ClaudeCode.WebSocket.pas   WebSocket-сервер RFC 6455 на Indy (лише loopback, перевірка токена)
-src/ClaudeCode.Mcp.pas         MCP / JSON-RPC, lock-файл, опис інструментів
+src/ClaudeCode.Mcp.pas         MCP / JSON-RPC: канал IDE (WebSocket, lock-файл) і сервер "delphi" (HTTP)
 src/ClaudeCode.Build.pas      запуск MSBuild і розбір виводу компілятора
 src/ClaudeCode.TextSync.pas   кодування, відновлення символів, мінімальна зміна (без ToolsAPI)
 src/ClaudeCode.EditorSync.pas перенесення змін з диска у відкриті редактори, виправлення кодування після diff
+src/ClaudeCode.ComponentProps.pas DFM-текст і встановлення властивостей з JSON через RTTI (без ToolsAPI)
+src/ClaudeCode.FormTools.pas  інструменти дизайнера форм
 src/ClaudeCode.IdeBackend.pas  реалізація інструментів через Open Tools API
 src/ClaudeCode.DiffForm.pas    вікно diff
 src/ClaudeCode.Diff.pas        порядковий diff (LCS)

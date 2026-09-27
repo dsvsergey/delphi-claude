@@ -111,6 +111,35 @@ check(pong.op === 10 && pong.data.toString() === 'hi', 'websocket ping -> pong')
 try { const c6 = await connect(token, '::1'); check(c6.status === '101', 'IPv6 ::1 connection'); c6.close(); }
 catch (e) { check(false, 'IPv6 ::1 connection: ' + e.message); }
 
+
+// 10. The "delphi" MCP server over Streamable HTTP (POST /mcp, Bearer token).
+async function post(body, auth = token, path = '/mcp', method = 'POST') {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method, headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
+      ...(auth ? { authorization: `Bearer ${auth}` } : {}) },
+    body: method === 'POST' ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  return { status: res.status, json: text ? JSON.parse(text) : null };
+}
+{
+  let h = await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }, 'wrong');
+  check(h.status === 401, 'http: wrong token -> 401');
+  h = await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+  check(h.status === 200 && h.json.result.serverInfo.name === 'delphi', 'http: initialize');
+  h = await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  check(h.status === 202, 'http: notification -> 202');
+  h = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  const hn = h.json.result.tools.map(t => t.name);
+  check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
+  h = await post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'getProjectInfo', arguments: {} } });
+  check(h.json.id === 3 && JSON.parse(h.json.result.content[0].text).project.name === 'Fake', 'http: tools/call through the main thread');
+  h = await post({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'openDiff', arguments: {} } });
+  check(h.json.result.isError === true, 'http: IDE-only tools are not callable');
+  h = await post(null, token, '/mcp', 'GET');
+  check(h.status === 405, 'http: GET -> 405');
+  h = await post({ jsonrpc: '2.0', id: 5, method: 'ping' }, token, '/other');
+  check(h.status === 404, 'http: unknown path -> 404');
+}
 // 9. Server notification on shutdown.
 try { const n = json(await c.next(25000)); check(n.method === 'selection_changed' && n.params.text === 'bye', 'notification broadcast'); }
 catch (e) { check(false, 'notification broadcast: ' + e.message); }

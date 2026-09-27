@@ -28,11 +28,31 @@ It uses the same protocol as the VS Code, JetBrains and Neovim integrations:
 | `getDiagnostics` | Error Insight (LSP) errors/warnings for open files |
 | `checkDocumentDirty` / `saveDocument` | editor buffer state and saving |
 | `close_tab` / `closeAllDiffTabs` | closing diff windows (and unmodified tabs) |
-| `buildProject` | builds a project with MSBuild using its `.dproj` settings (active config/platform by default); returns errors, warnings and hints and shows them in the **Claude Build** tab of the Messages window |
-| `getProjectInfo` | project group, active config/platform, framework, output file, defines, search paths, namespaces, units and forms |
 
 Notifications from the IDE: `selection_changed` (every ~300 ms when the selection/cursor changes)
 and `at_mentioned` (the "Send Selection to Claude" command).
+
+### Delphi tools for Claude (the `delphi` MCP server)
+
+Claude Code uses the IDE connection itself and shows the model only `getDiagnostics` from it,
+so Delphi-specific tools are served as a second MCP server, **`delphi`** (Streamable HTTP,
+`POST http://127.0.0.1:<port>/mcp`, same token as a Bearer header). The panel and
+**Open in External Console** start Claude with `--mcp-config` pointing at it, so the tools appear
+as `mcp__delphi__*` and Claude asks for permission before using them like any MCP tool.
+
+| Tool | What it does |
+|---|---|
+| `buildProject` | builds a project with MSBuild using its `.dproj` settings (active config/platform by default); returns errors, warnings and hints and shows them in the **Claude Build** tab of the Messages window |
+| `getProjectInfo` | project group, active config/platform, framework, output file, defines, search paths, namespaces, units and forms |
+| `getFormComponents` | a form as it is in the designer now (unsaved changes included): components and the DFM text, or one component's DFM block |
+| `getSelectedComponents` | components selected in the form designer, with their DFM blocks |
+| `setComponentProperties` | changes properties through the designer: nested (`Font.Size`), enums/sets, `clRed`-style identifiers, component references, `Items`/`Lines`, event handlers (created if missing); returns old/new values |
+| `createComponent` / `deleteComponent` | drops a registered component on the form (name, parent, bounds, properties) / deletes one |
+| `captureForm` | PNG of a VCL form or control as drawn in the designer; Claude opens it with its Read tool |
+
+Designer changes are not saved automatically: review them in the IDE and save or revert the form.
+A `claude` started outside the IDE can use the tools of the most recently started IDE with
+`claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
 ## The Claude Code panel
 
@@ -80,7 +100,7 @@ Menu **Tools → Claude Code**:
   Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
 - **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
-- **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt.
+- **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
 - **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`), the external console command (default `cmd.exe /k claude`) and whether Claude's file changes are applied to open editors (`1`/`0`).
@@ -109,10 +129,12 @@ When Claude proposes an edit, a diff window opens:
 ```
 ClaudeCodeIDE.dpk                 design-time package (rtl, vcl, designide, IndySystem, IndyCore)
 src/ClaudeCode.WebSocket.pas      RFC 6455 WebSocket server on Indy (loopback only, token check)
-src/ClaudeCode.Mcp.pas            MCP / JSON-RPC, lock file, tool definitions
+src/ClaudeCode.Mcp.pas            MCP / JSON-RPC: IDE channel (WebSocket, lock file) and the "delphi" server (HTTP)
 src/ClaudeCode.Build.pas          MSBuild runner and compiler output parser
 src/ClaudeCode.TextSync.pas       encodings, restoring lost characters, changed span (no ToolsAPI)
 src/ClaudeCode.EditorSync.pas     applies disk changes to open editors, fixes encodings after a diff
+src/ClaudeCode.ComponentProps.pas DFM text and setting properties from JSON via RTTI (no ToolsAPI)
+src/ClaudeCode.FormTools.pas      form designer tools
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)

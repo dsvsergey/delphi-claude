@@ -8,7 +8,7 @@ program TestHost;
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
-  ClaudeCode.TextSync,
+  ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -99,6 +99,167 @@ begin
   Writeln('TEXT SYNC OK');
 end;
 
+type
+  TTestShade = type Integer; // an integer type with identifiers, like TColor
+  TTestAlign = (taNone, taLeft, taClient);
+  TTestOption = (toBold, toItalic, toUnderline);
+  TTestOptions = set of TTestOption;
+
+  TTestFont = class(TPersistent)
+  private
+    FSize: Integer;
+    FName: string;
+  published
+    property Size: Integer read FSize write FSize;
+    property Name: string read FName write FName;
+  end;
+
+  TTestThing = class(TComponent)
+  private
+    FCaption: string;
+    FAlign: TTestAlign;
+    FOptions: TTestOptions;
+    FRatio: Double;
+    FEnabled: Boolean;
+    FShade: TTestShade;
+    FFont: TTestFont;
+    FItems: TStrings;
+    FLink: TComponent;
+    FOnChange: TNotifyEvent;
+    procedure SetFont(Value: TTestFont);
+    procedure SetItems(Value: TStrings);
+  public
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
+  published
+    property Caption: string read FCaption write FCaption;
+    property Align: TTestAlign read FAlign write FAlign default taNone;
+    property Options: TTestOptions read FOptions write FOptions default [];
+    property Ratio: Double read FRatio write FRatio;
+    property Enabled: Boolean read FEnabled write FEnabled default False;
+    property Shade: TTestShade read FShade write FShade default 0;
+    property Font: TTestFont read FFont write SetFont;
+    property Items: TStrings read FItems write SetItems;
+    property Link: TComponent read FLink write FLink;
+    property OnChange: TNotifyEvent read FOnChange write FOnChange;
+  end;
+
+constructor TTestThing.Create(AOwner: TComponent);
+begin
+  inherited;
+  FFont := TTestFont.Create;
+  FItems := TStringList.Create;
+end;
+
+destructor TTestThing.Destroy;
+begin
+  FItems.Free;
+  FFont.Free;
+  inherited;
+end;
+
+procedure TTestThing.SetFont(Value: TTestFont);
+begin
+  FFont.Size := Value.Size;
+  FFont.Name := Value.Name;
+end;
+
+procedure TTestThing.SetItems(Value: TStrings);
+begin
+  FItems.Assign(Value);
+end;
+
+const
+  ShadeIdents: array[0..1] of TIdentMapEntry = ((Value: 255; Name: 'shRed'), (Value: 0; Name: 'shBlack'));
+
+function ShadeToIdent(Int: Longint; var Ident: string): Boolean;
+begin
+  Result := IntToIdent(Int, Ident, ShadeIdents);
+end;
+
+function IdentToShade(const Ident: string; var Int: Longint): Boolean;
+begin
+  Result := IdentToInt(Ident, Int, ShadeIdents);
+end;
+
+type
+  THandlerHost = class
+    procedure Changed(Sender: TObject);
+  end;
+
+procedure THandlerHost.Changed(Sender: TObject);
+begin
+end;
+
+procedure ComponentPropsSelfTest;
+var
+  Root: TComponent;
+  A, B: TTestThing;
+  Props: TJSONObject;
+  Changes: TArray<TPropChange>;
+  Errors: TArray<string>;
+  Host: THandlerHost;
+  Dfm, Block: string;
+begin
+  RegisterIntegerConsts(TypeInfo(TTestShade), IdentToShade, ShadeToIdent);
+  Host := THandlerHost.Create;
+  Root := TComponent.Create(nil);
+  try
+    Root.Name := 'Form1';
+    A := TTestThing.Create(Root);
+    A.Name := 'ThingA';
+    B := TTestThing.Create(Root);
+    B.Name := 'ThingB';
+    Props := TJSONObject.ParseJSONValue(
+      '{"Caption":"Привіт","Align":"taClient","Options":["toBold","toUnderline"],"Ratio":1.5,' +
+      '"Enabled":true,"Shade":"shRed","Font.Size":12,"Font":{"Name":"Consolas"},' +
+      '"Items":["one","two"],"Link":"ThingB","OnChange":"ThingAChange"}') as TJSONObject;
+    try
+      Errors := SetComponentProperties(Root, A, Props,
+        function(const Name: string; TypeData: PTypeData): TMethod
+        begin
+          Expect(Name = 'ThingAChange', 'resolver gets the handler name');
+          Result.Code := @THandlerHost.Changed;
+          Result.Data := Host;
+        end,
+        function(const M: TMethod): string
+        begin
+          Result := 'ThingAChange';
+        end, Changes);
+    finally
+      Props.Free;
+    end;
+    Expect(Length(Errors) = 0, 'no errors: ' + string.Join('; ', Errors));
+    Expect((A.Caption = 'Привіт') and (A.Align = taClient) and (A.Options = [toBold, toUnderline]) and
+      (A.Ratio = 1.5) and A.Enabled and (A.Shade = 255) and (A.Font.Size = 12) and (A.Font.Name = 'Consolas') and
+      (A.Items.Count = 2) and (A.Items[1] = 'two') and (A.Link = B) and Assigned(A.OnChange), 'values applied');
+    Expect(Length(Changes) = 11, Format('%d changes reported', [Length(Changes)]));
+
+    Props := TJSONObject.ParseJSONValue(
+      '{"Align":"taNowhere","Link":"Missing","Nope":1,"Font.Size":"big","Shade":"shBlack"}') as TJSONObject;
+    try
+      Errors := SetComponentProperties(Root, A, Props, nil, nil, Changes);
+    finally
+      Props.Free;
+    end;
+    Expect(Length(Errors) = 4, 'bad values reported: ' + string.Join('; ', Errors));
+    Expect((A.Shade = 0) and (Length(Changes) = 1) and (Changes[0].OldValue = 'shRed') and
+      (Changes[0].NewValue = 'shBlack'), 'valid values still applied, identifiers reported');
+
+    Dfm := 'object Form1: TForm1'#13#10'  Caption = ''x'''#13#10'  object Panel1: TPanel'#13#10 +
+      '    object Button1: TButton'#13#10'      Caption = ''OK'''#13#10'    end'#13#10'  end'#13#10'end'#13#10;
+    Block := ExtractDfmObject(Dfm, 'Panel1');
+    Expect(Block.StartsWith('  object Panel1: TPanel') and Block.Contains('Button1') and
+      Block.TrimRight.EndsWith('  end'), 'DFM block extracted');
+    Expect(ExtractDfmObject(Dfm, 'Button').IsEmpty, 'no partial name match');
+    Expect(ComponentToDfm(B).StartsWith('object ThingB: TTestThing'), 'component streamed to DFM text');
+  finally
+    Root.Free;
+    Host.Free;
+  end;
+  Writeln('COMPONENT PROPS OK');
+end;
+
 { Builds tests\buildsample with MSBuild: once as is, once with a compile error. }
 procedure BuildRunSelfTest;
 var
@@ -178,6 +339,7 @@ begin
     DiffSelfTest;
     BuildParserSelfTest;
     TextSyncSelfTest;
+    ComponentPropsSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;

@@ -19,6 +19,7 @@ type
     Port: Integer;      // IDE MCP server port, 0 when not running
     WorkDir: string;
     Command: string;    // e.g. 'claude'
+    ExtraArgs: string;  // appended to Command, e.g. --mcp-config for the Delphi tools
     Background: TColor; // IDE window colour, decides light/dark terminal theme
     FontName: string;   // code editor font; empty = default
     FontSize: Integer;  // points
@@ -484,7 +485,7 @@ begin
     WriteLocal(#27'[31mThe Claude Code IDE server is not running (see Tools > Claude Code > Status and Log).'#27'[0m'#13#10);
     Exit;
   end;
-  Cmd := Trim(Info.Command + ' ' + Args);
+  Cmd := Trim(Info.Command + ' ' + Info.ExtraArgs + ' ' + Args);
   Dir := Info.WorkDir;
   if (Dir = '') or not DirectoryExists(Dir) then
     Dir := GetEnvironmentVariable('USERPROFILE');

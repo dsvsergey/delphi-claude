@@ -14,7 +14,7 @@ uses
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
-  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel;
+  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools;
 
 const
   DEFAULT_PANEL_COMMAND = 'claude';
@@ -45,6 +45,7 @@ type
     function ReadSetting(const Name, Default: string): string;
     procedure WriteSetting(const Name, Value: string);
     function WorkDir: string;
+    function ClaudeExtraArgs: string;
     procedure FocusEditor;
     function TerminalHostInfo: TTerminalHostInfo;
     function TerminalHostKey(Key: Word; Shift: TShiftState; Execute: Boolean): Boolean;
@@ -215,6 +216,15 @@ begin
   end;
 end;
 
+function TClaudeCodeWizard.ClaudeExtraArgs: string;
+begin
+  // Registers the "delphi" MCP server (build, project and form tools) for this session.
+  if FMcp.Running and (FMcp.McpConfigFile <> '') then
+    Result := '--mcp-config "' + FMcp.McpConfigFile + '"'
+  else
+    Result := '';
+end;
+
 { Terminal panel callbacks }
 
 function TClaudeCodeWizard.TerminalHostInfo: TTerminalHostInfo;
@@ -228,6 +238,7 @@ begin
   Result.Port := FMcp.Port;
   Result.WorkDir := WorkDir;
   Result.Command := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
+  Result.ExtraArgs := ClaudeExtraArgs;
   Result.Background := clWindow;
   if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
     Result.Background := Theming.StyleServices.GetSystemColor(clWindow);
@@ -454,7 +465,7 @@ begin
   Dir := WorkDir;
   Cmd := ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND);
   try
-    LaunchClaude(Dir, Cmd, FMcp.Port);
+    LaunchClaude(Dir, Trim(Cmd + ' ' + ClaudeExtraArgs), FMcp.Port);
     AddLog('Launched "' + Cmd + '" in ' + Dir);
   except
     on E: Exception do
@@ -467,7 +478,26 @@ var
   Sel: TSelectionInfo;
   Params: TJSONObject;
   LastLine: Integer;
+  Prompt: string;
+  Frame: TClaudeTerminalFrame;
 begin
+  // In the form designer: hand Claude the selected components as DFM text.
+  if DesignerIsActive then
+  begin
+    Prompt := SelectedComponentsPrompt;
+    Frame := ClaudePanelFrame;
+    if Prompt = '' then
+      ShowMessage('Select components in the form designer first.')
+    else if (Frame = nil) or not Frame.SessionRunning then
+      ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.')
+    else
+    begin
+      ShowClaudePanel;
+      Frame.PasteInput(Prompt);
+      Frame.FocusTerminal;
+    end;
+    Exit;
+  end;
   Sel := FBackend.CurrentSelection(False);
   if not Sel.Valid then
   begin
@@ -572,7 +602,7 @@ begin
     end;
     if (Listed = 0) and (JsonStr(Obj, 'outputTail') <> '') then
       Prompt := Prompt + 'Build output:' + #10 + JsonStr(Obj, 'outputTail') + #10;
-    Prompt := Prompt + 'Fix these errors, then call the buildProject tool to verify the build.';
+    Prompt := Prompt + 'Fix these errors, then build the project again (buildProject tool of the delphi MCP server) to verify.';
   finally
     V.Free;
   end;
@@ -603,6 +633,8 @@ begin
       [FMcp.Port, FMcp.ClientCount, FMcp.LockFile])
   else
     S := 'Server: not running';
+  if FMcp.McpConfigFile <> '' then
+    S := S + #13#10'Delphi tools (--mcp-config): ' + FMcp.McpConfigFile;
   S := S + #13#10'Workspace folders: ' + string.Join('; ', FBackend.WorkspaceFolders) +
     #13#10'Panel command: ' + ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND) +
     #13#10'External console command: ' + ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND) +

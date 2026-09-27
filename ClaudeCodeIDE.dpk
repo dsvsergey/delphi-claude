@@ -45,6 +45,8 @@ contains
   ClaudeCode.TextSync in 'src\ClaudeCode.TextSync.pas',
   ClaudeCode.DiffForm in 'src\ClaudeCode.DiffForm.pas',
   ClaudeCode.EditorSync in 'src\ClaudeCode.EditorSync.pas',
+  ClaudeCode.ComponentProps in 'src\ClaudeCode.ComponentProps.pas',
+  ClaudeCode.FormTools in 'src\ClaudeCode.FormTools.pas',
   ClaudeCode.IdeBackend in 'src\ClaudeCode.IdeBackend.pas',
   ClaudeCode.Launcher in 'src\ClaudeCode.Launcher.pas',
   ClaudeCode.ConPty in 'src\ClaudeCode.ConPty.pas',

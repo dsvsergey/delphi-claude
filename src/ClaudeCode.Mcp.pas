@@ -32,21 +32,31 @@ type
     function IdeName: string;
   end;
 
+  { mcIde: the Claude Code IDE protocol over WebSocket (~/.claude/ide/<port>.lock).
+    mcTools: the "delphi" MCP server over Streamable HTTP (POST /mcp) with the Delphi tools,
+    which Claude Code does not show to the model when they come from the IDE connection. }
+  TMcpChannel = (mcIde, mcTools);
+  TReplyProc = reference to procedure(const Json: string);
+
   TMcpServer = class
   private
     FWs: TWsServer;
     FBackend: IIdeBackend;
     FToken: string;
     FLockFile: string;
+    FMcpConfigFile: string;
     FLockFolders: string;
     FShuttingDown: Boolean;
     FOnClientsChanged: TNotifyEvent;
     procedure WsMessage(const Conn: IWsConnection; const Text: string);
     procedure WsConnect(const Conn: IWsConnection);
     procedure WsDisconnect(const Conn: IWsConnection);
-    procedure HandleRequest(const Conn: IWsConnection; const IdJson, Method: string; Params: TJSONObject);
-    procedure SendResult(const Conn: IWsConnection; const IdJson: string; Result: TJSONValue);
-    procedure SendError(const Conn: IWsConnection; const IdJson: string; Code: Integer; const Msg: string);
+    function HttpRequest(const Path, Body: string; out Status: Integer): string;
+    procedure HandleRequest(const Reply: TReplyProc; Channel: TMcpChannel; const IdJson, Method: string;
+      Params: TJSONObject);
+    procedure SendResult(const Reply: TReplyProc; const IdJson: string; Result: TJSONValue);
+    procedure SendError(const Reply: TReplyProc; const IdJson: string; Code: Integer; const Msg: string);
+    procedure WriteMcpConfig;
     procedure WriteLockFile(const Folders: TArray<string>);
     procedure ClientsChanged;
   public
@@ -60,20 +70,26 @@ type
     function ClientCount: Integer;
     function Port: Integer;
     property LockFile: string read FLockFile;
+    { --mcp-config file that registers the "delphi" server for this IDE instance. }
+    property McpConfigFile: string read FMcpConfigFile;
     property OnClientsChanged: TNotifyEvent read FOnClientsChanged write FOnClientsChanged;
   end;
 
 function ClaudeIdeLockDir: string;
 function ToolDefinitions: TJSONArray;
+function DelphiToolDefinitions: TJSONArray;
 
 implementation
 
 uses
-  System.IOUtils, Winapi.Windows, ClaudeCode.Utils;
+  System.IOUtils, System.SyncObjs, Winapi.Windows, ClaudeCode.Utils;
 
 const
   SERVER_NAME = 'claude-code-delphi';
-  SERVER_VERSION = '0.2.0';
+  SERVER_VERSION = '0.3.0';
+  TOOLS_SERVER_NAME = 'delphi'; // the key in mcpServers, so tools are mcp__delphi__*
+  MCP_HTTP_PATH = '/mcp';
+  MCP_CONFIG_NAME = 'delphi-mcp.json';
   DEFAULT_PROTOCOL = '2025-03-26';
 
 function ClaudeIdeLockDir: string;
@@ -152,6 +168,8 @@ begin
   Result.AddPair('inputSchema', InputSchema);
 end;
 
+procedure AddDelphiTools(Result: TJSONArray); forward;
+
 function ToolDefinitions: TJSONArray;
 begin
   Result := TJSONArray.Create;
@@ -191,6 +209,14 @@ begin
     Schema([TJSONPair.Create('tab_name', Prop('string', 'Tab name'))], ['tab_name'])));
   Result.Add(Tool('closeAllDiffTabs', 'Close all diff windows opened by Claude',
     Schema([], [])));
+  AddDelphiTools(Result);
+end;
+
+{ Delphi-specific tools. Claude Code hides every IDE-server tool from the model except
+  getDiagnostics/executeCode, so these are also served as the separate "delphi" MCP server
+  (Streamable HTTP on the same port) that Claude is started with. }
+procedure AddDelphiTools(Result: TJSONArray);
+begin
   Result.Add(Tool('buildProject',
     'Compile a Delphi project with MSBuild using its .dproj settings (the active IDE configuration and ' +
     'platform by default) and return the compiler errors, warnings and hints. Files are built from disk: ' +
@@ -211,6 +237,85 @@ begin
     Schema([
       TJSONPair.Create('project', Prop('string', 'Project file path or name; defaults to the active project'))],
       [])));
+
+  // Form designer. "form" is a unit/.dfm path, a unit name or a form name; empty = the current editor.
+  Result.Add(Tool('getFormComponents',
+    'Read a Delphi form (VCL or FMX) as it is in the IDE designer right now, including unsaved designer ' +
+    'changes: the list of components (name, class, parent) and the form''s DFM text. Prefer this over ' +
+    'reading the .dfm file while the form is open in the IDE.',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the form of the current editor')),
+      TJSONPair.Create('component', Prop('string', 'Only this component: return its DFM block (with its children)')),
+      TJSONPair.Create('includeDfm', Prop('boolean', 'Include the full DFM text (default true)'))],
+      [])));
+  Result.Add(Tool('getSelectedComponents',
+    'Get the components the user has selected in the Delphi form designer, with their DFM blocks',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form'))],
+      [])));
+  Result.Add(Tool('setComponentProperties',
+    'Change published properties of a component (or of the form itself) through the Delphi form designer, ' +
+    'instead of editing the .dfm file of a form that is open in the IDE. The designer keeps the .dfm, ' +
+    'the class declaration and the Object Inspector in sync; the user saves the form. ' +
+    'Values: strings, numbers, booleans; enums and sets by name ("alClient", ["akLeft","akTop"]); ' +
+    'identifiers such as clRed or crHandPoint; nested properties as "Font.Size" or {"Font": {"Style": "[fsBold]"}}; ' +
+    'component references by component name; TStrings (Items, Lines) as text or an array of lines; ' +
+    'events by handler method name (created in the unit if missing), "" to clear. ' +
+    'Returns old and new values of what changed.',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form')),
+      TJSONPair.Create('component', Prop('string', 'Component name; empty or the form name for the form itself')),
+      TJSONPair.Create('properties', Prop('object', 'Property names (or dotted paths) and values'))],
+      ['properties'])));
+  Result.Add(Tool('createComponent',
+    'Drop a new component on a Delphi form through the designer (the class must be registered in the IDE). ' +
+    'Optionally name it, place it inside a parent control and set properties like setComponentProperties.',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form')),
+      TJSONPair.Create('className', Prop('string', 'Component class, e.g. TButton, TFDQuery')),
+      TJSONPair.Create('name', Prop('string', 'Component name; default: the designer''s next free name')),
+      TJSONPair.Create('parent', Prop('string', 'Parent control name (e.g. a TPanel); default: the form')),
+      TJSONPair.Create('left', Prop('number', 'Left, relative to the parent')),
+      TJSONPair.Create('top', Prop('number', 'Top, relative to the parent')),
+      TJSONPair.Create('width', Prop('number', 'Width')),
+      TJSONPair.Create('height', Prop('number', 'Height')),
+      TJSONPair.Create('properties', Prop('object', 'Properties to set after creation'))],
+      ['className'])));
+  Result.Add(Tool('deleteComponent',
+    'Delete a component (and the controls it contains) from a Delphi form through the designer',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form')),
+      TJSONPair.Create('component', Prop('string', 'Component name'))],
+      ['component'])));
+  Result.Add(Tool('captureForm',
+    'Save a PNG picture of a VCL form (or of one windowed control on it) as it looks in the designer, ' +
+    'and return the file path; open it with the Read tool to look at the layout',
+    Schema([
+      TJSONPair.Create('form', Prop('string', 'Unit or .dfm path, unit name or form name; default: the current form')),
+      TJSONPair.Create('component', Prop('string', 'Only this windowed control (e.g. a panel)'))],
+      [])));
+end;
+
+function DelphiToolDefinitions: TJSONArray;
+begin
+  Result := TJSONArray.Create;
+  AddDelphiTools(Result);
+end;
+
+function IsDelphiTool(const Name: string): Boolean;
+var
+  Defs: TJSONArray;
+  V: TJSONValue;
+begin
+  Result := False;
+  Defs := DelphiToolDefinitions;
+  try
+    for V in Defs do
+      if JsonStr(V as TJSONObject, 'name') = Name then
+        Exit(True);
+  finally
+    Defs.Free;
+  end;
 end;
 
 { TMcpServer }
@@ -258,6 +363,7 @@ begin
   FWs.OnMessage := WsMessage;
   FWs.OnConnect := WsConnect;
   FWs.OnDisconnect := WsDisconnect;
+  FWs.OnHttp := HttpRequest;
   try
     FWs.Start;
   except
@@ -266,6 +372,7 @@ begin
   end;
   FLockFolders := #0; // force write
   RefreshLockFile;
+  WriteMcpConfig;
   Log(Format('Server listening on 127.0.0.1:%d', [FWs.Port]));
 end;
 
@@ -280,6 +387,11 @@ begin
   begin
     System.SysUtils.DeleteFile(FLockFile);
     FLockFile := '';
+  end;
+  if FMcpConfigFile <> '' then
+  begin
+    System.SysUtils.DeleteFile(FMcpConfigFile);
+    FMcpConfigFile := '';
   end;
   FWs.Stop;
   FreeAndNil(FWs);
@@ -327,6 +439,38 @@ begin
     TFile.WriteAllBytes(FLockFile, TEncoding.UTF8.GetBytes(Obj.ToJSON)); // no BOM
   finally
     Obj.Free;
+  end;
+end;
+
+procedure TMcpServer.WriteMcpConfig;
+var
+  Root, Servers, Srv: TJSONObject;
+  Bytes: TBytes;
+  Dir: string;
+begin
+  Dir := ClaudeIdeLockDir;
+  ForceDirectories(Dir);
+  Srv := TJSONObject.Create;
+  Srv.AddPair('type', 'http');
+  Srv.AddPair('url', Format('http://127.0.0.1:%d%s', [FWs.Port, MCP_HTTP_PATH]));
+  Srv.AddPair('headers', TJSONObject.Create.AddPair('Authorization', 'Bearer ' + FToken));
+  Servers := TJSONObject.Create;
+  Servers.AddPair(TOOLS_SERVER_NAME, Srv);
+  Root := TJSONObject.Create;
+  try
+    Root.AddPair('mcpServers', Servers);
+    Bytes := TEncoding.UTF8.GetBytes(Root.Format(2));
+  finally
+    Root.Free;
+  end;
+  // One file per IDE instance (passed to the panel's claude), plus a fixed name that always
+  // points at the most recently started IDE, for claude sessions started outside the IDE.
+  FMcpConfigFile := TPath.Combine(Dir, IntToStr(FWs.Port) + '.' + MCP_CONFIG_NAME);
+  TFile.WriteAllBytes(FMcpConfigFile, Bytes);
+  try
+    TFile.WriteAllBytes(TPath.Combine(Dir, MCP_CONFIG_NAME), Bytes);
+  except
+    // Another IDE instance may be writing it; the per-instance file is what the panel uses.
   end;
 end;
 
@@ -385,16 +529,16 @@ begin
   end;
 end;
 
-procedure TMcpServer.SendResult(const Conn: IWsConnection; const IdJson: string; Result: TJSONValue);
+procedure TMcpServer.SendResult(const Reply: TReplyProc; const IdJson: string; Result: TJSONValue);
 begin
   try
-    Conn.Send('{"jsonrpc":"2.0","id":' + IdJson + ',"result":' + Result.ToJSON + '}');
+    Reply('{"jsonrpc":"2.0","id":' + IdJson + ',"result":' + Result.ToJSON + '}');
   finally
     Result.Free;
   end;
 end;
 
-procedure TMcpServer.SendError(const Conn: IWsConnection; const IdJson: string; Code: Integer; const Msg: string);
+procedure TMcpServer.SendError(const Reply: TReplyProc; const IdJson: string; Code: Integer; const Msg: string);
 var
   Err: TJSONObject;
 begin
@@ -402,7 +546,7 @@ begin
   try
     Err.AddPair('code', TJSONNumber.Create(Code));
     Err.AddPair('message', Msg);
-    Conn.Send('{"jsonrpc":"2.0","id":' + IdJson + ',"error":' + Err.ToJSON + '}');
+    Reply('{"jsonrpc":"2.0","id":' + IdJson + ',"error":' + Err.ToJSON + '}');
   finally
     Err.Free;
   end;
@@ -454,13 +598,123 @@ begin
     ParamsVal := Obj.GetValue('params');
     if not (ParamsVal is TJSONObject) then
       ParamsVal := nil;
-    HandleRequest(Conn, IdVal.ToJSON, Method, TJSONObject(ParamsVal));
+    HandleRequest(
+      procedure(const Json: string)
+      begin
+        Conn.Send(Json);
+      end,
+      mcIde, IdVal.ToJSON, Method, TJSONObject(ParamsVal));
   finally
     V.Free;
   end;
 end;
 
-procedure TMcpServer.HandleRequest(const Conn: IWsConnection; const IdJson, Method: string; Params: TJSONObject);
+type
+  { One HTTP request waiting for its answer, which may come later from the main thread. }
+  IHttpWait = interface
+    procedure Answer(const Json: string);
+    function Wait(const ShuttingDown: TFunc<Boolean>; out Json: string): Boolean;
+  end;
+
+  THttpWait = class(TInterfacedObject, IHttpWait)
+  private
+    FEvent: TEvent;
+    FJson: string;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Answer(const Json: string);
+    function Wait(const ShuttingDown: TFunc<Boolean>; out Json: string): Boolean;
+  end;
+
+constructor THttpWait.Create;
+begin
+  inherited Create;
+  FEvent := TEvent.Create(nil, True, False, '');
+end;
+
+destructor THttpWait.Destroy;
+begin
+  FEvent.Free;
+  inherited;
+end;
+
+procedure THttpWait.Answer(const Json: string);
+begin
+  FJson := Json;
+  FEvent.SetEvent;
+end;
+
+function THttpWait.Wait(const ShuttingDown: TFunc<Boolean>; out Json: string): Boolean;
+begin
+  // Poll so that stopping the server never waits for a tool that will not run any more.
+  while FEvent.WaitFor(200) <> wrSignaled do
+    if ShuttingDown() then
+      Exit(False);
+  Json := FJson;
+  Result := True;
+end;
+
+const
+  SHUTTING_DOWN_JSON = '{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Server is shutting down"}}';
+
+function TMcpServer.HttpRequest(const Path, Body: string; out Status: Integer): string;
+var
+  V: TJSONValue;
+  Obj, Params: TJSONObject;
+  IdVal: TJSONValue;
+  Method, UrlPath: string;
+  Waiter: IHttpWait;
+begin
+  // Connection thread; may block until the tool has run in the main thread.
+  Status := 200;
+  Result := '';
+  UrlPath := Path;
+  if Pos('?', UrlPath) > 0 then
+    UrlPath := Copy(UrlPath, 1, Pos('?', UrlPath) - 1);
+  if not SameText(UrlPath, MCP_HTTP_PATH) then
+  begin
+    Status := 404;
+    Exit;
+  end;
+  if FShuttingDown then
+    Exit(SHUTTING_DOWN_JSON);
+  V := TJSONObject.ParseJSONValue(Body);
+  try
+    if not (V is TJSONObject) then
+      Exit('{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}');
+    Obj := TJSONObject(V);
+    Method := JsonStr(Obj, 'method');
+    IdVal := Obj.GetValue('id');
+    if (Method = '') or (IdVal = nil) or (IdVal is TJSONNull) then
+    begin
+      Status := 202; // notification or response: accepted, no body
+      Exit;
+    end;
+    if Obj.GetValue('params') is TJSONObject then
+      Params := TJSONObject(Obj.GetValue('params'))
+    else
+      Params := nil;
+    Waiter := THttpWait.Create;
+    HandleRequest(
+      procedure(const Json: string)
+      begin
+        Waiter.Answer(Json);
+      end,
+      mcTools, IdVal.ToJSON, Method, Params);
+  finally
+    V.Free;
+  end;
+  if not Waiter.Wait(
+    function: Boolean
+    begin
+      Result := FShuttingDown;
+    end, Result) then
+    Result := SHUTTING_DOWN_JSON;
+end;
+
+procedure TMcpServer.HandleRequest(const Reply: TReplyProc; Channel: TMcpChannel; const IdJson, Method: string;
+  Params: TJSONObject);
 var
   R, Caps, Info: TJSONObject;
   ToolName: string;
@@ -474,26 +728,40 @@ begin
     R.AddPair('protocolVersion', JsonStr(Params, 'protocolVersion', DEFAULT_PROTOCOL));
     Caps := TJSONObject.Create;
     Caps.AddPair('tools', TJSONObject.Create.AddPair('listChanged', TJSONBool.Create(False)));
-    Caps.AddPair('logging', TJSONObject.Create);
+    if Channel = mcIde then
+      Caps.AddPair('logging', TJSONObject.Create);
     R.AddPair('capabilities', Caps);
     Info := TJSONObject.Create;
-    Info.AddPair('name', SERVER_NAME);
+    if Channel = mcIde then
+      Info.AddPair('name', SERVER_NAME)
+    else
+      Info.AddPair('name', TOOLS_SERVER_NAME);
     Info.AddPair('version', SERVER_VERSION);
     R.AddPair('serverInfo', Info);
-    SendResult(Conn, IdJson, R);
+    SendResult(Reply, IdJson, R);
   end
   else if Method = 'ping' then
-    SendResult(Conn, IdJson, TJSONObject.Create)
+    SendResult(Reply, IdJson, TJSONObject.Create)
   else if Method = 'tools/list' then
-    SendResult(Conn, IdJson, TJSONObject.Create.AddPair('tools', ToolDefinitions))
+  begin
+    if Channel = mcIde then
+      SendResult(Reply, IdJson, TJSONObject.Create.AddPair('tools', ToolDefinitions))
+    else
+      SendResult(Reply, IdJson, TJSONObject.Create.AddPair('tools', DelphiToolDefinitions));
+  end
   else if Method = 'prompts/list' then
-    SendResult(Conn, IdJson, TJSONObject.Create.AddPair('prompts', TJSONArray.Create))
+    SendResult(Reply, IdJson, TJSONObject.Create.AddPair('prompts', TJSONArray.Create))
   else if Method = 'resources/list' then
-    SendResult(Conn, IdJson, TJSONObject.Create.AddPair('resources', TJSONArray.Create))
+    SendResult(Reply, IdJson, TJSONObject.Create.AddPair('resources', TJSONArray.Create))
   else if Method = 'tools/call' then
   begin
     ToolName := JsonStr(Params, 'name');
     Log('tools/call ' + ToolName);
+    if (Channel = mcTools) and not IsDelphiTool(ToolName) then
+    begin
+      SendResult(Reply, IdJson, ToolResultJson(TToolResult.Error('Unknown tool: ' + ToolName)));
+      Exit;
+    end;
     ArgsJson := '{}';
     if Params <> nil then
     begin
@@ -515,11 +783,11 @@ begin
             FBackend.ExecuteTool(ToolName, Args,
               procedure(const Res: TToolResult)
               begin
-                SendResult(Conn, IdJson, ToolResultJson(Res));
+                SendResult(Reply, IdJson, ToolResultJson(Res));
               end);
           except
             on E: Exception do
-              SendResult(Conn, IdJson, ToolResultJson(TToolResult.Error(E.ClassName + ': ' + E.Message)));
+              SendResult(Reply, IdJson, ToolResultJson(TToolResult.Error(E.ClassName + ': ' + E.Message)));
           end;
         finally
           Args.Free;
@@ -527,7 +795,7 @@ begin
       end);
   end
   else
-    SendError(Conn, IdJson, -32601, 'Method not found: ' + Method);
+    SendError(Reply, IdJson, -32601, 'Method not found: ' + Method);
 end;
 
 end.

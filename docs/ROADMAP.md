@@ -61,21 +61,31 @@
 
 ---
 
-## Етап 3. Дизайнер форм  `[ ]`
+## Етап 3. Дизайнер форм  `[x]`
 
-### 3.1 `getFormComponents`
-- Дерево компонентів форми (`IOTAFormEditor`/`IOTAComponent`): ім'я, клас, батько,
-  змінені (non-default) властивості, обробники подій.
+### 3.0 Сервер `delphi` для інструментів  `[x]`
+- Виявлено: Claude Code (2.1.x) з IDE-з'єднання показує моделі лише `getDiagnostics`/`executeCode`
+  (`mcp__ide__*` фільтруються), тож інструменти етапу 1 модель не бачила.
+- Той самий порт тепер приймає MCP Streamable HTTP (`POST /mcp`, `Authorization: Bearer <token>`) —
+  сервер `delphi` лише з Delphi-інструментами. Файл `~/.claude/ide/<port>.delphi-mcp.json` (+ `delphi-mcp.json`
+  для останньої IDE) передається `claude` через `--mcp-config` з панелі та External Console.
+- Перевірено справжнім Claude CLI: бачить `mcp__delphi__*` і викликає їх; дозволи — як для будь-якого MCP.
 
-### 3.2 `getSelectedComponents` + нотифікація
-- Виділені в дизайнері компоненти; команда **Send Selected Components to Claude**.
+### 3.1 `getFormComponents`  `[x]`
+- Живий стан дизайнера (`INTAFormEditor.GetFormResource` → DFM-текст UTF-8), список компонентів
+  (ім'я, клас, батько), або DFM-блок одного компонента.
 
-### 3.3 `setComponentProperty` / `createComponent` / `deleteComponent`
-- Зміни форми через дизайнер (з підтвердженням користувача, як diff), щоб не редагувати
-  `.dfm`, відкритий у дизайнері.
+### 3.2 `getSelectedComponents` + Ctrl+Alt+K у дизайнері  `[x]`
+- Виділені компоненти з DFM-блоками; **Send Selection to Claude** у дизайнері вставляє їх у панель.
 
-### 3.4 `captureForm`
-- Знімок форми в PNG у `%TEMP%`, шлях повертається Claude (аналіз UI за зображенням).
+### 3.3 `setComponentProperties` / `createComponent` / `deleteComponent`  `[x]`
+- Через дизайнер (`IOTAFormEditor.CreateComponent`, `IOTAComponent.Delete`, RTTI + `IDesigner.Modified`).
+  Властивості з JSON (`src/ClaudeCode.ComponentProps.pas`, тести в TestHost): вкладені шляхи, enum/set,
+  ідентифікатори (`clRed`), посилання на компоненти, TStrings, події (`IDesigner.CreateMethod`).
+  Повертаються старі/нові значення. Підтвердження — дозвіл Claude Code на MCP-інструмент; форма не зберігається сама.
+
+### 3.4 `captureForm`  `[x]`
+- `TWinControl.PaintTo` → PNG у `%TEMP%\claude-delphi`; лише VCL.
 
 ---
 

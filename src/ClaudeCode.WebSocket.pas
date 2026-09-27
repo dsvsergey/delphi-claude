@@ -21,6 +21,9 @@ type
 
   TWsMessageEvent = procedure(const Conn: IWsConnection; const Text: string) of object;
   TWsConnEvent = procedure(const Conn: IWsConnection) of object;
+  { A plain HTTP POST (MCP Streamable HTTP). Raised in the connection's thread and may block
+    until the answer is ready. Return the response body; Status 202 means "no body". }
+  TWsHttpEvent = function(const Path, Body: string; out Status: Integer): string of object;
 
   TWsServer = class
   private
@@ -33,8 +36,10 @@ type
     FOnMessage: TWsMessageEvent;
     FOnConnect: TWsConnEvent;
     FOnDisconnect: TWsConnEvent;
+    FOnHttp: TWsHttpEvent;
     procedure ServerExecute(AContext: TIdContext);
     function Handshake(AContext: TIdContext): Boolean;
+    procedure ServeHttp(AContext: TIdContext; const Method, Path: string; Headers: TDictionary<string, string>);
     procedure ReadLoop(AContext: TIdContext; const Conn: IWsConnection);
     function TryBind(Port: Integer; WithIPv6: Boolean): Boolean;
   public
@@ -48,12 +53,13 @@ type
     property OnMessage: TWsMessageEvent read FOnMessage write FOnMessage;
     property OnConnect: TWsConnEvent read FOnConnect write FOnConnect;
     property OnDisconnect: TWsConnEvent read FOnDisconnect write FOnDisconnect;
+    property OnHttp: TWsHttpEvent read FOnHttp write FOnHttp;
   end;
 
 implementation
 
 uses
-  System.Hash, System.NetEncoding, ClaudeCode.Utils;
+  System.Hash, System.NetEncoding, IdIOHandler, ClaudeCode.Utils;
 
 const
   WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -310,17 +316,23 @@ var
       'Content-Length: 0'#13#10'Connection: close'#13#10#13#10);
   end;
 
+var
+  RequestLine, Method, Path: string;
+  Parts: TArray<string>;
 begin
   Result := False;
   AContext.Connection.IOHandler.ReadTimeout := 10000;
   Headers := TDictionary<string, string>.Create;
   try
-    Line := AContext.Connection.IOHandler.ReadLn; // request line
-    if not Line.StartsWith('GET ', True) then
+    RequestLine := AContext.Connection.IOHandler.ReadLn;
+    Parts := RequestLine.Split([' ']);
+    if Length(Parts) < 2 then
     begin
       Reject('400 Bad Request');
       Exit;
     end;
+    Method := UpperCase(Parts[0]);
+    Path := Parts[1];
     repeat
       Line := AContext.Connection.IOHandler.ReadLn;
       if Line = '' then
@@ -330,12 +342,20 @@ begin
         Headers.AddOrSetValue(LowerCase(Trim(Copy(Line, 1, P - 1))), Trim(Copy(Line, P + 1, MaxInt)));
     until False;
 
-    if not Headers.TryGetValue(AUTH_HEADER, Line) or (Line <> FAuthToken) then
+    // Same token either way: the IDE header, or "Authorization: Bearer" for plain HTTP clients.
+    if not ((Headers.TryGetValue(AUTH_HEADER, Line) and (Line = FAuthToken)) or
+            (Headers.TryGetValue('authorization', Line) and (Line = 'Bearer ' + FAuthToken))) then
     begin
       Reject('401 Unauthorized');
       Exit;
     end;
-    if not Headers.TryGetValue('upgrade', Line) or not SameText(Line, 'websocket') or
+    if not Headers.ContainsKey('upgrade') then
+    begin
+      ServeHttp(AContext, Method, Path, Headers);
+      Exit;
+    end;
+    if (Method <> 'GET') or
+       not Headers.TryGetValue('upgrade', Line) or not SameText(Line, 'websocket') or
        not Headers.TryGetValue('sec-websocket-key', Key) then
     begin
       Reject('400 Bad Request');
@@ -361,6 +381,55 @@ begin
   finally
     Headers.Free;
   end;
+end;
+
+procedure TWsServer.ServeHttp(AContext: TIdContext; const Method, Path: string;
+  Headers: TDictionary<string, string>);
+const
+  MAX_BODY = 64 * 1024 * 1024;
+var
+  LenText, Body, Reply, StatusText: string;
+  Len, Status: Integer;
+  Bytes: TIdBytes;
+  ReplyBytes: TBytes;
+  IO: TIdIOHandler;
+begin
+  IO := AContext.Connection.IOHandler;
+  if Method <> 'POST' then
+  begin
+    // No server-initiated stream (GET) and no sessions (DELETE): allowed by MCP Streamable HTTP.
+    IO.Write('HTTP/1.1 405 Method Not Allowed'#13#10'Allow: POST'#13#10 +
+      'Content-Length: 0'#13#10'Connection: close'#13#10#13#10);
+    Exit;
+  end;
+  Len := 0;
+  if Headers.TryGetValue('content-length', LenText) then
+    Len := StrToIntDef(LenText, -1);
+  if (Len < 0) or (Len > MAX_BODY) or not Assigned(FOnHttp) then
+  begin
+    IO.Write('HTTP/1.1 400 Bad Request'#13#10'Content-Length: 0'#13#10'Connection: close'#13#10#13#10);
+    Exit;
+  end;
+  SetLength(Bytes, 0);
+  if Len > 0 then
+    IO.ReadBytes(Bytes, Len, False);
+  Body := TEncoding.UTF8.GetString(TBytes(Bytes));
+  IO.ReadTimeout := IdTimeoutInfinite; // tools such as buildProject take a while
+  Reply := FOnHttp(Path, Body, Status);
+  case Status of
+    200: StatusText := '200 OK';
+    202: StatusText := '202 Accepted';
+    404: StatusText := '404 Not Found';
+  else
+    StatusText := IntToStr(Status) + ' Error';
+  end;
+  ReplyBytes := TEncoding.UTF8.GetBytes(Reply);
+  IO.Write('HTTP/1.1 ' + StatusText + #13#10 +
+    'Content-Type: application/json'#13#10 +
+    'Content-Length: ' + IntToStr(Length(ReplyBytes)) + #13#10 +
+    'Connection: close'#13#10#13#10);
+  if Length(ReplyBytes) > 0 then
+    IO.Write(TIdBytes(ReplyBytes));
 end;
 
 procedure TWsServer.ReadLoop(AContext: TIdContext; const Conn: IWsConnection);
