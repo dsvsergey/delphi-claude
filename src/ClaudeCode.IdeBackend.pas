@@ -6,7 +6,8 @@ unit ClaudeCode.IdeBackend;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build;
+  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build,
+  ClaudeCode.EditorSync;
 
 type
   TSelectionInfo = record
@@ -25,6 +26,7 @@ type
   private
     FLatest: TSelectionInfo;
     FBuild: TBuildRunner;
+    FSync: TEditorSync;
     function ToolOpenFile(Args: TJSONObject): TToolResult;
     procedure ToolOpenDiff(Args: TJSONObject; const Done: TToolDone);
     function ToolGetOpenEditors: TToolResult;
@@ -48,11 +50,13 @@ type
     function CurrentSelection(WithText: Boolean): TSelectionInfo;
     function ActiveProjectDir: string;
     property Latest: TSelectionInfo read FLatest write FLatest;
+    property Sync: TEditorSync read FSync;
   end;
 
 function EditorServices: IOTAEditorServices;
 function ModuleServices: IOTAModuleServices;
 function FindEditBuffer(const FileName: string): IOTAEditBuffer;
+function ReadBufferBytes(const Buffer: IOTAEditBuffer; StartPos, MaxCount: Integer): TBytes;
 { A project of the current group by file path, file name or name without extension;
   the active project when Name is empty. }
 function FindProject(const Name: string): IOTAProject;
@@ -61,7 +65,7 @@ implementation
 
 uses
   System.Generics.Collections, System.Generics.Defaults, System.Math, Vcl.Forms,
-  ClaudeCode.Utils, ClaudeCode.DiffForm;
+  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync;
 
 const
   MAX_SELECTION_BYTES = 2 * 1024 * 1024;
@@ -116,32 +120,35 @@ begin
   Result := Utf8BytesToString(ReadBufferBytes(Buffer, 0, MaxInt));
 end;
 
-{ Converts a 0-based offset in S into a 1-based line and 0-based character index. }
-procedure OffsetToLineChar(const S: string; Offset: Integer; out Line, CharIdx: Integer);
+{ The LSP "character" of an editor position: the UTF-16 index within the line. The editor
+  counts in its own units (UTF-8 bytes in the buffer), so the line prefix is read and measured. }
+function LspCharacter(const View: IOTAEditView; const CP: TOTACharPos): Integer;
+const
+  MAX_LINE_BYTES = 64 * 1024;
 var
-  I, LineStart: Integer;
+  LineStart: TOTACharPos;
+  P0, P1: Integer;
 begin
-  Line := 1;
-  LineStart := 0;
-  for I := 1 to Min(Offset, Length(S)) do
-    if S[I] = #10 then
-    begin
-      Inc(Line);
-      LineStart := I;
-    end;
-  CharIdx := Offset - LineStart;
+  Result := CP.CharIndex;
+  if (View = nil) or (View.Buffer = nil) or (CP.CharIndex <= 0) then
+    Exit;
+  LineStart.Line := CP.Line;
+  LineStart.CharIndex := 0;
+  P0 := View.CharPosToPos(LineStart);
+  P1 := View.CharPosToPos(CP);
+  if (P0 >= 0) and (P1 > P0) and (P1 - P0 <= MAX_LINE_BYTES) then
+    Result := Length(Utf8BytesToString(ReadBufferBytes(View.Buffer, P0, P1 - P0)));
 end;
 
-procedure SelectRange(const View: IOTAEditView; Line1, Char1, Line2, Char2: Integer);
+{ Selects the buffer range between two UTF-8 byte offsets. }
+procedure SelectRange(const View: IOTAEditView; Offset1, Offset2: Integer);
 var
   CP: TOTACharPos;
   EP1, EP2: TOTAEditPos;
 begin
-  CP.Line := Line1;
-  CP.CharIndex := Char1;
+  CP := View.PosToCharPos(Offset1);
   View.ConvertPos(False, EP1, CP);
-  CP.Line := Line2;
-  CP.CharIndex := Char2;
+  CP := View.PosToCharPos(Offset2);
   View.ConvertPos(False, EP2, CP);
   View.Block.Style := btNonInclusive;
   View.Position.Move(EP1.Line, EP1.Col);
@@ -250,10 +257,12 @@ constructor TDelphiIdeBackend.Create;
 begin
   inherited Create;
   FBuild := TBuildRunner.Create;
+  FSync := TEditorSync.Create;
 end;
 
 destructor TDelphiIdeBackend.Destroy;
 begin
+  FSync.Free;
   FBuild.Free;
   inherited;
 end;
@@ -261,6 +270,7 @@ end;
 procedure TDelphiIdeBackend.Shutdown;
 begin
   FBuild.Cancel;
+  FSync.Enabled := False;
 end;
 
 function TDelphiIdeBackend.IdeName: string;
@@ -332,9 +342,9 @@ begin
     CP2 := CP1;
   end;
   Result.StartLine := CP1.Line - 1;
-  Result.StartChar := CP1.CharIndex;
+  Result.StartChar := LspCharacter(View, CP1);
   Result.EndLine := CP2.Line - 1;
-  Result.EndChar := CP2.CharIndex;
+  Result.EndChar := LspCharacter(View, CP2);
 end;
 
 function TDelphiIdeBackend.ActiveProjectDir: string;
@@ -430,7 +440,7 @@ var
   Path, StartText, EndText, Text: string;
   Buffer: IOTAEditBuffer;
   View: IOTAEditView;
-  P, Q, EndOff, L1, C1, L2, C2: Integer;
+  P, Q, EndOff: Integer;
   Obj: TJSONObject;
 begin
   Path := PathFromUri(JsonStr(Args, 'filePath'));
@@ -464,9 +474,9 @@ begin
       if JsonBool(Args, 'selectToEndOfLine', False) then
         while (EndOff < Length(Text)) and not CharInSet(Text[EndOff + 1], [#13, #10]) do
           Inc(EndOff);
-      OffsetToLineChar(Text, P - 1, L1, C1);
-      OffsetToLineChar(Text, EndOff, L2, C2);
-      SelectRange(View, L1, C1, L2, C2);
+      // Text came from the UTF-8 buffer, so its UTF-8 length up to a point is a buffer offset.
+      SelectRange(View, TEncoding.UTF8.GetByteCount(Copy(Text, 1, P - 1)),
+        TEncoding.UTF8.GetByteCount(Copy(Text, 1, EndOff)));
     end;
   end;
 
@@ -485,9 +495,12 @@ end;
 
 procedure TDelphiIdeBackend.ToolOpenDiff(Args: TJSONObject; const Done: TToolDone);
 var
-  OldPath, NewPath, NewText, OldText, TabName: string;
+  OldPath, NewPath, NewText, OldText, TabName, Note: string;
   Existing, Form: TClaudeDiffForm;
   Theming: IOTAIDEThemingServices;
+  OldEncoding: TEncodingInfo;
+  Restored, Unresolved: Integer;
+  Sync: TEditorSync;
 begin
   OldPath := PathFromUri(JsonStr(Args, 'old_file_path'));
   NewPath := PathFromUri(JsonStr(Args, 'new_file_path'));
@@ -503,14 +516,33 @@ begin
   if not ReadTextFileAutoEnc(OldPath, OldText) then
     OldText := '';
 
+  // Claude reads files as UTF-8: in an ANSI file every non-ASCII character arrives as U+FFFD.
+  Note := '';
+  OldEncoding := DetectFileEncoding(OldPath);
+  if OldEncoding.IsAnsi then
+  begin
+    Note := OldEncoding.Name + ' file, the encoding is kept';
+    NewText := RestoreLostChars(OldText, NewText, Restored, Unresolved);
+    if Restored > 0 then
+      Note := Note + Format('; restored %d line(s) Claude could not read', [Restored]);
+    if Unresolved > 0 then
+      Note := Note + Format('; %d changed line(s) contain U+FFFD, check them', [Unresolved]);
+  end;
+
+  Sync := FSync;
   Form := TClaudeDiffForm.CreateDiff(TabName, NewPath, OldText, NewText,
     procedure(Decision: TDiffDecision; const FinalContents: string)
     begin
       if Decision = ddAccepted then
-        Done(TToolResult.Ok(['FILE_SAVED', FinalContents]))
+      begin
+        Sync.ExpectWrite(NewPath, OldEncoding);
+        Done(TToolResult.Ok(['FILE_SAVED', FinalContents]));
+      end
       else
         Done(TToolResult.Ok(['DIFF_REJECTED', TabName]));
     end);
+  if Note <> '' then
+    Form.Note := Note;
   if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
   begin
     Theming.RegisterFormClass(TClaudeDiffForm);
@@ -590,6 +622,8 @@ var
   Entry, Diag, Range: TJSONObject;
   Diags: TJSONArray;
   Explicit: Boolean;
+  Buffer: IOTAEditBuffer;
+  View: IOTAEditView;
 begin
   Res := TJSONArray.Create;
   Files := TList<string>.Create;
@@ -610,11 +644,15 @@ begin
       if (Module <> nil) and Supports(Module, IOTAModuleErrors, ModErrors) then
       begin
         Errs := ModErrors.GetErrors(F);
+        Buffer := FindEditBuffer(F);
+        View := nil;
+        if Buffer <> nil then
+          View := Buffer.TopView;
         for E in Errs do
         begin
           Range := TJSONObject.Create;
-          Range.AddPair('start', PosJson(E.Start.Line - 1, E.Start.CharIndex));
-          Range.AddPair('end', PosJson(E.Stop.Line - 1, E.Stop.CharIndex));
+          Range.AddPair('start', PosJson(E.Start.Line - 1, LspCharacter(View, E.Start)));
+          Range.AddPair('end', PosJson(E.Stop.Line - 1, LspCharacter(View, E.Stop)));
           Diag := TJSONObject.Create;
           Diag.AddPair('message', E.Text);
           Diag.AddPair('severity', SeverityName[EnsureRange(E.Severity, 0, 3)]);

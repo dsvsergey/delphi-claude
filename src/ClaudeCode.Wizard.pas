@@ -97,6 +97,7 @@ begin
   FWorkspaceTimer.OnTimer := WorkspaceTimerTick;
 
   CreateMenu;
+  FBackend.Sync.Enabled := ReadSetting('SyncEditor', '1') <> '0';
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
@@ -616,15 +617,19 @@ end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);
 var
-  Values: array[0..1] of string;
+  Values: array[0..2] of string;
 begin
   Values[0] := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
   Values[1] := ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND);
+  Values[2] := ReadSetting('SyncEditor', '1');
   if InputQuery('Claude Code Settings',
-    ['Command run in the Claude Code panel:', 'Command for "Open in External Console":'], Values) then
+    ['Command run in the Claude Code panel:', 'Command for "Open in External Console":',
+     'Apply Claude''s file changes to open editors (1 = on, 0 = off):'], Values) then
   begin
     WriteSetting('PanelCommand', Trim(Values[0]));
     WriteSetting('LaunchCommand', Trim(Values[1]));
+    WriteSetting('SyncEditor', Trim(Values[2]));
+    FBackend.Sync.Enabled := Trim(Values[2]) <> '0';
   end;
 end;
 

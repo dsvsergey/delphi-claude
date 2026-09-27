@@ -6,8 +6,9 @@ program TestHost;
 {$APPTYPE CONSOLE}
 
 uses
-  System.SysUtils, System.Classes, System.JSON, System.IOUtils,
+  Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
+  ClaudeCode.TextSync,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -36,6 +37,66 @@ begin
     (M.FileName = '') and (M.Code = 'MSB1009') and (M.Severity = bsError), 'msbuild error without location');
   Expect(not ParseBuildLine('  BuildSample.dproj -> C:\p\BuildSample.exe', '', M), 'plain output line');
   Writeln('BUILD PARSER OK');
+end;
+
+{ Decodes like Node's Buffer.toString('utf8'): invalid bytes become U+FFFD. }
+function LenientUtf8(const B: TBytes): string;
+var
+  N: Integer;
+begin
+  N := MultiByteToWideChar(CP_UTF8, 0, PAnsiChar(@B[0]), Length(B), nil, 0);
+  SetLength(Result, N);
+  MultiByteToWideChar(CP_UTF8, 0, PAnsiChar(@B[0]), Length(B), PChar(Result), N);
+end;
+
+procedure TextSyncSelfTest;
+var
+  Letters, Original, Edited, Seen, Restored: string;
+  AnsiBytes, Fixed: TBytes;
+  R, U: Integer;
+  Span: TSpan;
+  Old8, New8: TBytes;
+begin
+  // Non-ASCII letters of the current ANSI code page (cp1251 here: Cyrillic).
+  Letters := TEncoding.ANSI.GetString(TBytes.Create($C0, $C1, $C2, $E0, $E1, $E2));
+  Original := 'unit U;'#13#10'const S = ''' + Letters + ''';'#13#10'  X = 1; // ' + Letters + #13#10'end.'#13#10;
+  AnsiBytes := TEncoding.ANSI.GetBytes(Original);
+  Expect(DetectEncoding(AnsiBytes).IsAnsi, 'ANSI detected');
+  Expect(DetectEncoding(TEncoding.UTF8.GetBytes(Original)).Kind = tekUtf8, 'UTF-8 detected');
+  Expect(DetectEncoding(TEncoding.ASCII.GetBytes('abc')).Kind = tekAscii, 'ASCII detected');
+  Expect(DecodeFileBytes(AnsiBytes) = Original, 'ANSI decoded');
+
+  // What Claude sees (ANSI read as UTF-8) and writes back with one line changed.
+  Seen := LenientUtf8(AnsiBytes);
+  Expect(Pos(REPLACEMENT_CHAR, Seen) > 0, 'ANSI read as UTF-8 has U+FFFD');
+  Edited := StringReplace(Seen, 'X = 1;', 'X = 2;', []);
+  Restored := RestoreLostChars(Original, Edited, R, U);
+  Expect(Restored = StringReplace(Original, 'X = 1;', 'X = 2;', []),
+    Format('lost characters restored (%d restored, %d unresolved)', [R, U]));
+  Expect((R = 2) and (U = 0), Format('restore counts %d/%d', [R, U]));
+  // A run whose surroundings are not in the old text cannot be restored.
+  RestoreLostChars(Original, Edited + 'Q := ''zz' + StringOfChar(REPLACEMENT_CHAR, 3) + 'qq'';'#13#10, R, U);
+  Expect((R = 2) and (U = 1), Format('unresolved line counted %d/%d', [R, U]));
+
+  Old8 := TEncoding.UTF8.GetBytes('abc' + Letters + 'xyz');
+  New8 := TEncoding.UTF8.GetBytes('abc' + Letters + 'Qxyz');
+  Span := ChangedSpanUtf8(Old8, New8);
+  Expect((Span.Start = Length(TEncoding.UTF8.GetBytes('abc' + Letters))) and (Span.OldLen = 0) and
+    (Span.NewLen = 1), 'insert span');
+  // Replacing one multi-byte letter must not split its UTF-8 sequence.
+  New8 := TEncoding.UTF8.GetBytes('abc' + Copy(Letters, 1, 2) + 'Z' + Copy(Letters, 4, MaxInt) + 'xyz');
+  Span := ChangedSpanUtf8(Old8, New8);
+  Expect((Span.Start = Length(TEncoding.UTF8.GetBytes('abc' + Copy(Letters, 1, 2)))) and
+    (Span.OldLen = 2) and (Span.NewLen = 1), Format('replace span %d/%d/%d', [Span.Start, Span.OldLen, Span.NewLen]));
+  Expect(ChangedSpanUtf8(Old8, Old8).IsEmpty, 'empty span');
+
+  Expect(FixDelphiSourceEncoding(Original, DetectEncoding(TEncoding.UTF8.GetBytes(Original)),
+    DetectEncoding(AnsiBytes), Fixed) and (DetectEncoding(Fixed).IsAnsi), 'UTF-8 back to ANSI');
+  Expect(FixDelphiSourceEncoding(Original, DetectEncoding(TEncoding.UTF8.GetBytes(Original)),
+    DetectEncoding(nil), Fixed) and (DetectEncoding(Fixed).Kind = tekUtf8Bom), 'new file gets a BOM');
+  Expect(not FixDelphiSourceEncoding('abc', DetectEncoding(TEncoding.ASCII.GetBytes('abc')),
+    DetectEncoding(AnsiBytes), Fixed), 'ASCII left alone');
+  Writeln('TEXT SYNC OK');
 end;
 
 { Builds tests\buildsample with MSBuild: once as is, once with a compile error. }
@@ -116,6 +177,7 @@ begin
   try
     DiffSelfTest;
     BuildParserSelfTest;
+    TextSyncSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;

@@ -26,6 +26,7 @@ type
     FOnDecision: TDiffDecisionProc;
     FMemoEdited: Boolean;
     FDiffStale: Boolean;
+    FNote: string;
     FInfo: TLabel;
     FPages: TPageControl;
     FList: TListBox;
@@ -41,6 +42,7 @@ type
     procedure MemoChange(Sender: TObject);
     function CurrentNewText: string;
     procedure Decide(D: TDiffDecision);
+    procedure SetNote(const Value: string);
   public
     constructor CreateDiff(const ATabName, AFilePath, AOldText, ANewText: string;
       const OnDecision: TDiffDecisionProc);
@@ -49,6 +51,8 @@ type
     procedure Reject;
     property TabName: string read FTabName;
     property Decided: Boolean read FDecided;
+    { Extra information shown next to the file name (e.g. encoding repairs). }
+    property Note: string read FNote write SetNote;
   end;
 
 function FindDiffForm(const TabName: string): TClaudeDiffForm;
@@ -237,6 +241,8 @@ begin
     FInfo.Caption := Format('%s   (new file)   +%d lines', [FFilePath, Added])
   else
     FInfo.Caption := Format('%s   +%d / -%d lines', [FFilePath, Added, Removed]);
+  if FNote <> '' then
+    FInfo.Caption := FInfo.Caption + '   (' + FNote + ')';
   MaxLen := 0;
   for I := 0 to High(FDiff) do
     if Length(FDiff[I].Text) > MaxLen then
@@ -252,6 +258,12 @@ begin
     end;
   FList.Invalidate;
   FDiffStale := False;
+end;
+
+procedure TClaudeDiffForm.SetNote(const Value: string);
+begin
+  FNote := Value;
+  RebuildDiff;
 end;
 
 procedure TClaudeDiffForm.ListDrawItem(Control: TWinControl; Index: Integer; Rect: TRect;

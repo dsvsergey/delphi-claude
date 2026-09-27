@@ -83,13 +83,26 @@ Menu **Tools → Claude Code**:
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
-- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`) and the external console command (default `cmd.exe /k claude`).
+- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`), the external console command (default `cmd.exe /k claude`) and whether Claude's file changes are applied to open editors (`1`/`0`).
 
 If Claude Code is already running in a separate terminal in the project folder, run `/ide` there and choose **Delphi**.
 
 When Claude proposes an edit, a diff window opens:
 **Accept (Ctrl+Enter)** sends the content (including your edits from the *Proposed* tab), then Claude writes the file;
 **Reject (Esc)** or closing the window rejects the edit. You can also answer in the Claude terminal; the window then closes by itself.
+
+### Files Claude changes on disk
+
+- An open, unmodified editor tab picks up Claude's change right away as one undoable edit
+  (**Ctrl+Z** in the editor restores the previous text) and is saved by the IDE, so there is no
+  "file changed on disk" prompt and the file keeps its encoding. Tabs with unsaved edits are not touched;
+  a note appears on the **Claude Code** tab of the Messages window.
+- ANSI files (e.g. cp1251): Claude reads them as UTF-8 and every non-ASCII character arrives as `�`.
+  The diff window and the editor sync put the original characters back (whole unchanged lines, and
+  runs of `�` in changed lines when the text around them matches). Lines that could not be repaired are reported.
+- After an accepted diff, a Delphi source (`.pas`, `.dpr`, `.dpk`, `.inc`) that Claude saved as UTF-8 without
+  a BOM is converted back to ANSI if it was ANSI, or gets a UTF-8 BOM, so the compiler reads its non-ASCII text correctly.
+- Turn it off in **Settings…** (third field: `0`).
 
 ## Layout
 
@@ -98,6 +111,8 @@ ClaudeCodeIDE.dpk                 design-time package (rtl, vcl, designide, Indy
 src/ClaudeCode.WebSocket.pas      RFC 6455 WebSocket server on Indy (loopback only, token check)
 src/ClaudeCode.Mcp.pas            MCP / JSON-RPC, lock file, tool definitions
 src/ClaudeCode.Build.pas          MSBuild runner and compiler output parser
+src/ClaudeCode.TextSync.pas       encodings, restoring lost characters, changed span (no ToolsAPI)
+src/ClaudeCode.EditorSync.pas     applies disk changes to open editors, fixes encodings after a diff
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)
@@ -131,4 +146,5 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 
 - `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.
 - `buildProject` compiles files from disk: unsaved editor changes are reported in `unsavedFiles` unless `saveModified` is set.
-- `character` positions are counted by character index in the editor line; lines with non-ASCII characters may be slightly off.
+- `character` positions are UTF-16 indexes computed from the editor buffer; they have not been verified against every IDE edge case (tabs, very long lines).
+- Encoding repair only sees files written through an accepted diff or open in the editor; files Claude writes in auto-accept mode while closed keep whatever encoding Claude used.
