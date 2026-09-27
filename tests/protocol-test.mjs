@@ -130,7 +130,7 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   check(h.status === 202, 'http: notification -> 202');
   h = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const hn = h.json.result.tools.map(t => t.name);
-  check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm','getDebugState','evaluateExpression','setBreakpoint','listBreakpoints','removeBreakpoint','debugControl'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
+  check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm','getDebugState','evaluateExpression','setBreakpoint','listBreakpoints','removeBreakpoint','debugControl','getFileHistory'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
   h = await post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'getProjectInfo', arguments: {} } });
   check(h.json.id === 3 && JSON.parse(h.json.result.content[0].text).project.name === 'Fake', 'http: tools/call through the main thread');
   h = await post({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'openDiff', arguments: {} } });
@@ -139,6 +139,23 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   check(h.status === 405, 'http: GET -> 405');
   h = await post({ jsonrpc: '2.0', id: 5, method: 'ping' }, token, '/other');
   check(h.status === 404, 'http: unknown path -> 404');
+  // getFileHistory through the delphi server, on a temporary __history folder.
+  {
+    const fs = await import('node:fs'); const path = await import('node:path'); const os = await import('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cchist-'));
+    fs.mkdirSync(path.join(dir, '__history'));
+    fs.writeFileSync(path.join(dir, 'Unit1.pas'), 'unit Unit1; // v3');
+    fs.writeFileSync(path.join(dir, '__history', 'Unit1.pas.~1~'), 'unit Unit1; // v1');
+    fs.writeFileSync(path.join(dir, '__history', 'Unit1.pas.~2~'), 'unit Unit1; // v2');
+    const later = new Date(Date.now() + 1000);
+    fs.utimesSync(path.join(dir, '__history', 'Unit1.pas.~2~'), later, later);
+    let hh = await post({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'getFileHistory', arguments: { file: path.join(dir, 'Unit1.pas') } } });
+    const list = JSON.parse(hh.json.result.content[0].text).versions;
+    check(list.length === 2 && list[0].version === 2 && list[1].version === 1, 'http: getFileHistory lists versions, newest first');
+    hh = await post({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'getFileHistory', arguments: { file: path.join(dir, 'Unit1.pas'), version: 1 } } });
+    check(JSON.parse(hh.json.result.content[0].text).text === 'unit Unit1; // v1', 'http: getFileHistory returns a version');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 // 9. Server notification on shutdown.
 try { const n = json(await c.next(25000)); check(n.method === 'selection_changed' && n.params.text === 'bye', 'notification broadcast'); }

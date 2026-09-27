@@ -328,6 +328,15 @@ begin
       TJSONPair.Create('waitSec', Prop('number', 'How long to wait for the next stop (default 10; 0 for run)'))],
       ['action'])));
 
+  Result.Add(Tool('getFileHistory',
+    'The Delphi IDE''s local history of a file (__history\<name>.~N~ backups made on each save in the IDE): ' +
+    'without "version" the list of versions, newest first; with "version" the text of that version. ' +
+    'Useful to see or restore what the file looked like before recent changes.',
+    Schema([
+      TJSONPair.Create('file', Prop('string', 'Path of the file')),
+      TJSONPair.Create('version', Prop('number', 'Version number from the list'))],
+      ['file'])));
+
   Result.Add(Tool('captureForm',
     'Save a PNG picture of a VCL form (or of one windowed control on it) as it looks in the designer, ' +
     'and return the file path; open it with the Read tool to look at the layout',

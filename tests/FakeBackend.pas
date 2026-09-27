@@ -22,7 +22,7 @@ type
 implementation
 
 uses
-  ClaudeCode.Utils;
+  ClaudeCode.Utils, ClaudeCode.FileHistory;
 
 constructor TFakeBackend.Create(const Folder: string);
 begin
@@ -53,6 +53,8 @@ begin
     Done(TToolResult.Ok([Args.ToJSON]))
   else if Name = 'getProjectInfo' then
     Done(TToolResult.Ok(['{"project":{"name":"Fake"}}']))
+  else if Name = 'getFileHistory' then
+    Done(ToolGetFileHistory(Args))
   else if Name = 'closeAllDiffTabs' then
     Done(TToolResult.Ok(['CLOSED_0_DIFF_TABS']))
   else

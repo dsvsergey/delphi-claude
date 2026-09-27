@@ -53,6 +53,7 @@ as `mcp__delphi__*` and Claude asks for permission before using them like any MC
 | `evaluateExpression` | evaluates a Delphi expression in the stopped process (like Evaluate/Modify); side effects only when allowed |
 | `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | source breakpoints with an optional condition and pass count |
 | `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (waits for the next stop and returns the new state), `run`, `terminate` |
+| `getFileHistory` | the IDE's local history of a file (`__history\name.~N~`): list of versions or the text of one |
 
 Designer changes are not saved automatically: review them in the IDE and save or revert the form.
 A `claude` started outside the IDE can use the tools of the most recently started IDE with
@@ -110,11 +111,11 @@ Menu **Tools → Claude Code**:
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
 - **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
 - **Explain Debugger Stop with Claude**: when the debugged program is stopped (breakpoint, exception, pause), pastes the exception, the current line with its source and the call stack into the Claude panel as a request.
+- **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
-- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`), the external console command (default `cmd.exe /k claude`) and whether Claude's file changes are applied to open editors (`1`/`0`).
-
+- **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, and whether context-menu requests are sent right away.
 
 ### Context menus
 
@@ -126,6 +127,9 @@ Menu **Tools → Claude Code**:
 - **Project Manager → Add to Claude Context**: puts `@file` (or `@folder/` for a project) for the selected nodes into the prompt.
 - **Messages → Fix Build Errors with Claude**: the same as the Tools menu command (the Messages view does not expose
   the text of its lines, so the project is rebuilt to collect the errors).
+
+The status bar of each code editor window shows **Claude: off / connected / working / waiting for you**.
+
 If Claude Code is already running in a separate terminal in the project folder, run `/ide` there and choose **Delphi**.
 
 When Claude proposes an edit, a diff window opens:
@@ -146,7 +150,7 @@ between changes; Accept writes only the taken changes (taking none is a rejectio
   runs of `�` in changed lines when the text around them matches). Lines that could not be repaired are reported.
 - After an accepted diff, a Delphi source (`.pas`, `.dpr`, `.dpk`, `.inc`) that Claude saved as UTF-8 without
   a BOM is converted back to ANSI if it was ANSI, or gets a UTF-8 BOM, so the compiler reads its non-ASCII text correctly.
-- Turn it off in **Settings…** (third field: `0`).
+- Turn it off in **Settings…** ("Apply Claude's file changes to open editors").
 
 ## Layout
 
@@ -161,6 +165,9 @@ src/ClaudeCode.ComponentProps.pas DFM text and setting properties from JSON via 
 src/ClaudeCode.FormTools.pas      form designer tools
 src/ClaudeCode.DebugTools.pas     debugger tools (state, evaluate, breakpoints, stepping)
 src/ClaudeCode.ContextMenus.pas   editor, Project Manager and Messages context menu entries
+src/ClaudeCode.FileHistory.pas    the IDE's __history backups (getFileHistory)
+src/ClaudeCode.SettingsForm.pas   Settings dialog
+src/ClaudeCode.ClaudeMd.pas       Create CLAUDE.md for Project
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)

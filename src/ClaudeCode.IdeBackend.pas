@@ -65,7 +65,8 @@ implementation
 
 uses
   System.Generics.Collections, System.Generics.Defaults, System.Math, Vcl.Forms,
-  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools, ClaudeCode.DebugTools;
+  ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools, ClaudeCode.DebugTools,
+  ClaudeCode.FileHistory;
 
 const
   MAX_SELECTION_BYTES = 2 * 1024 * 1024;
@@ -454,6 +455,8 @@ begin
     Done(ToolListBreakpoints(Args))
   else if Name = 'removeBreakpoint' then
     Done(ToolRemoveBreakpoint(Args))
+  else if Name = 'getFileHistory' then
+    Done(ToolGetFileHistory(Args))
   else if Name = 'debugControl' then
     ToolDebugControl(Args, Done)
   else
