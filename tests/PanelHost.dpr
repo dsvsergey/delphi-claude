@@ -171,6 +171,16 @@ begin
         FFrame.StopSession;
         AddLog(Format('StopSession took %d ms', [GetTickCount - T0]));
       end;
+    18:
+      begin
+        // Tabs: a second tab for another folder, then back to the first by folder.
+        FFrame.AddView(FOutDir);
+        AddLog(Format('Tabs: %d, active "%s"', [FFrame.ViewCount, FFrame.ActiveView.TabCaption]));
+        AddLog('ViewFor(workdir) is tab 0: ' + BoolToStr(FFrame.ViewFor(FWorkDir) = FFrame.Views[0], True) +
+          ', tabs: ' + IntToStr(FFrame.ViewCount));
+        AddLog('ViewFor(outdir) is tab 1: ' + BoolToStr(FFrame.ViewFor(FOutDir) = FFrame.Views[1], True) +
+          ', tabs: ' + IntToStr(FFrame.ViewCount));
+      end;
     19:
       begin
         AddLog('MCP clients after stop: ' + IntToStr(FMcp.ClientCount));

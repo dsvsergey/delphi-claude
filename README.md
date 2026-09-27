@@ -28,11 +28,35 @@ It uses the same protocol as the VS Code, JetBrains and Neovim integrations:
 | `getDiagnostics` | Error Insight (LSP) errors/warnings for open files |
 | `checkDocumentDirty` / `saveDocument` | editor buffer state and saving |
 | `close_tab` / `closeAllDiffTabs` | closing diff windows (and unmodified tabs) |
-| `buildProject` | builds a project with MSBuild using its `.dproj` settings (active config/platform by default); returns errors, warnings and hints and shows them in the **Claude Build** tab of the Messages window |
-| `getProjectInfo` | project group, active config/platform, framework, output file, defines, search paths, namespaces, units and forms |
 
 Notifications from the IDE: `selection_changed` (every ~300 ms when the selection/cursor changes)
 and `at_mentioned` (the "Send Selection to Claude" command).
+
+### Delphi tools for Claude (the `delphi` MCP server)
+
+Claude Code uses the IDE connection itself and shows the model only `getDiagnostics` from it,
+so Delphi-specific tools are served as a second MCP server, **`delphi`** (Streamable HTTP,
+`POST http://127.0.0.1:<port>/mcp`, same token as a Bearer header). The panel and
+**Open in External Console** start Claude with `--mcp-config` pointing at it, so the tools appear
+as `mcp__delphi__*` and Claude asks for permission before using them like any MCP tool.
+
+| Tool | What it does |
+|---|---|
+| `buildProject` | builds a project with MSBuild using its `.dproj` settings (active config/platform by default); returns errors, warnings and hints and shows them in the **Claude Build** tab of the Messages window |
+| `getProjectInfo` | project group, active config/platform, framework, output file, defines, search paths, namespaces, units and forms |
+| `getFormComponents` | a form as it is in the designer now (unsaved changes included): components and the DFM text, or one component's DFM block |
+| `getSelectedComponents` | components selected in the form designer, with their DFM blocks |
+| `setComponentProperties` | changes properties through the designer: nested (`Font.Size`), enums/sets, `clRed`-style identifiers, component references, `Items`/`Lines`, event handlers (created if missing); returns old/new values |
+| `createComponent` / `deleteComponent` | drops a registered component on the form (name, parent, bounds, properties) / deletes one |
+| `captureForm` | PNG of a VCL form or control as drawn in the designer; Claude opens it with its Read tool |
+| `getDebugState` | the debugged process: state, current thread with call stack and source around the current line, the exception when stopped on one, all threads |
+| `evaluateExpression` | evaluates a Delphi expression in the stopped process (like Evaluate/Modify); side effects only when allowed |
+| `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | source breakpoints with an optional condition and pass count |
+| `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (waits for the next stop and returns the new state), `run`, `terminate` |
+
+Designer changes are not saved automatically: review them in the IDE and save or revert the form.
+A `claude` started outside the IDE can use the tools of the most recently started IDE with
+`claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
 ## The Claude Code panel
 
@@ -42,14 +66,19 @@ The panel works the same way as the VS Code integrated terminal:
 - xterm.js, the terminal page and `WebView2Loader.dll` are embedded in the BPL as resources, nothing else to copy.
   Only the Microsoft Edge WebView2 Runtime is required (included in Windows 11).
 
-Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**.
+Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**, **+** (new tab), **x** (close tab).
 After a session ends, pressing Enter in the panel starts a new one.
+
+**Tabs.** Each tab is a separate Claude Code session. **Open Claude Code** switches to the tab of the active project's folder (or opens one); **+** opens a new tab for the current project, **x** or a middle-click closes a tab (and stops its session). A tab shows `●` while Claude works and `!` when it waits for you; the toolbar buttons and **Send Selection** / context menu requests act on the active tab.
 
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
-- **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste;
+- **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste text; a copied picture (screenshot) is saved as PNG and its path pasted so Claude attaches it; copied files become `@`-mentions;
+- files dragged onto the terminal are pasted as `@`-mentions (pictures as paths);
 - **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
 - **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
+
+The panel's status line shows **Working...**, **Waiting for you** or **Ready** with Claude's current title. When a turn ends or Claude asks for you while the panel is hidden or the IDE is in the background, the IDE flashes on the taskbar and the panel caption gets ` *`.
 
 Closing the panel or the IDE ends the session together with all its child processes (Job Object).
 Terminal colors follow the light or dark IDE theme; the font is taken from the code editor.
@@ -80,24 +109,58 @@ Menu **Tools → Claude Code**:
   Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
 - **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
-- **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt.
+- **Explain Debugger Stop with Claude**: when the debugged program is stopped (breakpoint, exception, pause), pastes the exception, the current line with its source and the call stack into the Claude panel as a request.
+- **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
-- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`) and the external console command (default `cmd.exe /k claude`).
+- **Settings…**: the panel command (default `claude`, e.g. `claude --model opus`), the external console command (default `cmd.exe /k claude`) and whether Claude's file changes are applied to open editors (`1`/`0`).
 
+
+### Context menus
+
+- **Code editor → Claude Code**: *Explain*, *Refactor*, *Find Bugs*, *Write DUnitX Test*, *Add XML Documentation*
+  send a request with `@file#Lx-y` for the selection (or the current line) and submit it;
+  *Ask Claude About This...* only puts the reference into the prompt. The request texts can be changed in
+  `%USERPROFILE%\.claude\delphi-prompts.json`, e.g. `{"explain": "Поясни цей код: {ref}"}`
+  (keys: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+- **Project Manager → Add to Claude Context**: puts `@file` (or `@folder/` for a project) for the selected nodes into the prompt.
+- **Messages → Fix Build Errors with Claude**: the same as the Tools menu command (the Messages view does not expose
+  the text of its lines, so the project is rebuilt to collect the errors).
 If Claude Code is already running in a separate terminal in the project folder, run `/ide` there and choose **Delphi**.
 
 When Claude proposes an edit, a diff window opens:
 **Accept (Ctrl+Enter)** sends the content (including your edits from the *Proposed* tab), then Claude writes the file;
 **Reject (Esc)** or closing the window rejects the edit. You can also answer in the Claude terminal; the window then closes by itself.
+The diff window shows the changed part of each line highlighted, unified or **side by side** (the choice is remembered).
+Single changes can be skipped: **Space** or double-click takes/skips the change under the cursor, **N** / **P** move
+between changes; Accept writes only the taken changes (taking none is a rejection).
+
+### Files Claude changes on disk
+
+- An open, unmodified editor tab picks up Claude's change right away as one undoable edit
+  (**Ctrl+Z** in the editor restores the previous text) and is saved by the IDE, so there is no
+  "file changed on disk" prompt and the file keeps its encoding. Tabs with unsaved edits are not touched;
+  a note appears on the **Claude Code** tab of the Messages window.
+- ANSI files (e.g. cp1251): Claude reads them as UTF-8 and every non-ASCII character arrives as `�`.
+  The diff window and the editor sync put the original characters back (whole unchanged lines, and
+  runs of `�` in changed lines when the text around them matches). Lines that could not be repaired are reported.
+- After an accepted diff, a Delphi source (`.pas`, `.dpr`, `.dpk`, `.inc`) that Claude saved as UTF-8 without
+  a BOM is converted back to ANSI if it was ANSI, or gets a UTF-8 BOM, so the compiler reads its non-ASCII text correctly.
+- Turn it off in **Settings…** (third field: `0`).
 
 ## Layout
 
 ```
 ClaudeCodeIDE.dpk                 design-time package (rtl, vcl, designide, IndySystem, IndyCore)
 src/ClaudeCode.WebSocket.pas      RFC 6455 WebSocket server on Indy (loopback only, token check)
-src/ClaudeCode.Mcp.pas            MCP / JSON-RPC, lock file, tool definitions
+src/ClaudeCode.Mcp.pas            MCP / JSON-RPC: IDE channel (WebSocket, lock file) and the "delphi" server (HTTP)
 src/ClaudeCode.Build.pas          MSBuild runner and compiler output parser
+src/ClaudeCode.TextSync.pas       encodings, restoring lost characters, changed span (no ToolsAPI)
+src/ClaudeCode.EditorSync.pas     applies disk changes to open editors, fixes encodings after a diff
+src/ClaudeCode.ComponentProps.pas DFM text and setting properties from JSON via RTTI (no ToolsAPI)
+src/ClaudeCode.FormTools.pas      form designer tools
+src/ClaudeCode.DebugTools.pas     debugger tools (state, evaluate, breakpoints, stepping)
+src/ClaudeCode.ContextMenus.pas   editor, Project Manager and Messages context menu entries
 src/ClaudeCode.IdeBackend.pas     tool implementations via the Open Tools API
 src/ClaudeCode.DiffForm.pas       diff window
 src/ClaudeCode.Diff.pas           line diff (LCS)
@@ -131,4 +194,6 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 
 - `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.
 - `buildProject` compiles files from disk: unsaved editor changes are reported in `unsavedFiles` unless `saveModified` is set.
-- `character` positions are counted by character index in the editor line; lines with non-ASCII characters may be slightly off.
+- `character` positions are UTF-16 indexes computed from the editor buffer; they have not been verified against every IDE edge case (tabs, very long lines).
+- Encoding repair only sees files written through an accepted diff or open in the editor; files Claude writes in auto-accept mode while closed keep whatever encoding Claude used.
+- The debugger API has no list of local variables: Claude reads the code around the current line and evaluates what it needs. Exception class/message come from evaluating `ExceptObject` (best effort).

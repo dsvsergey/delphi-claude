@@ -14,7 +14,8 @@ uses
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
-  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel;
+  ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
+  ClaudeCode.DebugTools, ClaudeCode.ContextMenus, System.IOUtils;
 
 const
   DEFAULT_PANEL_COMMAND = 'claude';
@@ -36,6 +37,7 @@ type
     FSendSelAction: TAction;
     FLastSent: TSelectionInfo;
     FLog: TStringList;
+    FContextMenus: TClaudeContextMenus;
     procedure AddLog(const Msg: string);
     procedure StartServer;
     procedure CreateMenu;
@@ -45,6 +47,7 @@ type
     function ReadSetting(const Name, Default: string): string;
     procedure WriteSetting(const Name, Value: string);
     function WorkDir: string;
+    function ClaudeExtraArgs: string;
     procedure FocusEditor;
     function TerminalHostInfo: TTerminalHostInfo;
     function TerminalHostKey(Key: Word; Shift: TShiftState; Execute: Boolean): Boolean;
@@ -59,6 +62,13 @@ type
     procedure SettingsExecute(Sender: TObject);
     procedure BuildFixExecute(Sender: TObject);
     procedure BuildFixDone(const R: TToolResult);
+    procedure ExplainStopExecute(Sender: TObject);
+    function SessionFrame: TClaudeTerminalFrame;
+    procedure SendToClaude(const Text: string; Submit: Boolean);
+    function FileRef(const Path: string; Line1, Line2: Integer): string;
+    function PromptTemplate(const Command: string): string;
+    procedure EditorCommand(const Command: string);
+    procedure AddToContext(const Files: TArray<string>);
   public
     constructor Create;
     destructor Destroy; override;
@@ -97,6 +107,15 @@ begin
   FWorkspaceTimer.OnTimer := WorkspaceTimerTick;
 
   CreateMenu;
+  FBackend.Sync.Enabled := ReadSetting('SyncEditor', '1') <> '0';
+  FContextMenus := TClaudeContextMenus.Create(
+    function: Boolean
+    begin
+      Result := FBackend.CurrentSelection(False).Valid;
+    end);
+  FContextMenus.OnEditorCommand := EditorCommand;
+  FContextMenus.OnAddToContext := AddToContext;
+  FContextMenus.OnFixBuildErrors := BuildFixExecute;
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
@@ -105,6 +124,7 @@ end;
 
 destructor TClaudeCodeWizard.Destroy;
 begin
+  FreeAndNil(FContextMenus);
   FreeAndNil(FSelTimer);
   FreeAndNil(FWorkspaceTimer);
   UnregisterClaudePanel; // stops the terminal session
@@ -214,6 +234,15 @@ begin
   end;
 end;
 
+function TClaudeCodeWizard.ClaudeExtraArgs: string;
+begin
+  // Registers the "delphi" MCP server (build, project and form tools) for this session.
+  if FMcp.Running and (FMcp.McpConfigFile <> '') then
+    Result := '--mcp-config "' + FMcp.McpConfigFile + '"'
+  else
+    Result := '';
+end;
+
 { Terminal panel callbacks }
 
 function TClaudeCodeWizard.TerminalHostInfo: TTerminalHostInfo;
@@ -227,6 +256,7 @@ begin
   Result.Port := FMcp.Port;
   Result.WorkDir := WorkDir;
   Result.Command := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
+  Result.ExtraArgs := ClaudeExtraArgs;
   Result.Background := clWindow;
   if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
     Result.Background := Theming.StyleServices.GetSystemColor(clWindow);
@@ -361,6 +391,7 @@ begin
   AddItem(NewAction('ClaudeCodeConsoleAction', 'Open in External Console', '', OpenConsoleExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeBuildFixAction', 'Build and Fix Errors with Claude', '', BuildFixExecute));
+  AddItem(NewAction('ClaudeCodeExplainStopAction', 'Explain Debugger Stop with Claude', '', ExplainStopExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
@@ -426,6 +457,7 @@ end;
 procedure TClaudeCodeWizard.OpenClaudeExecute(Sender: TObject);
 var
   Frame: TClaudeTerminalFrame;
+  View: TClaudeSessionView;
 begin
   Frame := ShowClaudePanel;
   if Frame = nil then
@@ -434,8 +466,12 @@ begin
       'Use Tools > Claude Code > Open in External Console.');
     Exit;
   end;
-  if not Frame.SessionRunning then
-    Frame.StartSession;
+  // One tab per project folder: switch to it, or take an unused tab, or open a new one.
+  View := Frame.ViewFor(WorkDir);
+  if not View.SessionRunning then
+    View.StartSession
+  else
+    View.FocusTerminal;
 end;
 
 procedure TClaudeCodeWizard.OpenConsoleExecute(Sender: TObject);
@@ -453,7 +489,7 @@ begin
   Dir := WorkDir;
   Cmd := ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND);
   try
-    LaunchClaude(Dir, Cmd, FMcp.Port);
+    LaunchClaude(Dir, Trim(Cmd + ' ' + ClaudeExtraArgs), FMcp.Port);
     AddLog('Launched "' + Cmd + '" in ' + Dir);
   except
     on E: Exception do
@@ -466,11 +502,45 @@ var
   Sel: TSelectionInfo;
   Params: TJSONObject;
   LastLine: Integer;
+  Prompt: string;
+  Frame: TClaudeTerminalFrame;
 begin
+  // In the form designer: hand Claude the selected components as DFM text.
+  if DesignerIsActive then
+  begin
+    Prompt := SelectedComponentsPrompt;
+    Frame := ClaudePanelFrame;
+    if Prompt = '' then
+      ShowMessage('Select components in the form designer first.')
+    else if (Frame = nil) or not Frame.SessionRunning then
+      ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.')
+    else
+    begin
+      ShowClaudePanel;
+      Frame.PasteInput(Prompt);
+      Frame.FocusTerminal;
+    end;
+    Exit;
+  end;
   Sel := FBackend.CurrentSelection(False);
   if not Sel.Valid then
   begin
     ShowMessage('No active editor.');
+    Exit;
+  end;
+  // With sessions in the panel, only the active tab gets the reference (at_mentioned would go
+  // to every connected session).
+  Frame := ClaudePanelFrame;
+  if (Frame <> nil) and Frame.SessionRunning then
+  begin
+    LastLine := Sel.EndLine + 1;
+    if (Sel.EndChar = 0) and (LastLine > Sel.StartLine + 1) then
+      Dec(LastLine);
+    if Sel.IsEmpty then
+      Prompt := FileRef(Sel.FilePath, 0, 0)
+    else
+      Prompt := FileRef(Sel.FilePath, Sel.StartLine + 1, LastLine);
+    SendToClaude(Prompt + ' ', False);
     Exit;
   end;
   if FMcp.ClientCount = 0 then
@@ -571,7 +641,7 @@ begin
     end;
     if (Listed = 0) and (JsonStr(Obj, 'outputTail') <> '') then
       Prompt := Prompt + 'Build output:' + #10 + JsonStr(Obj, 'outputTail') + #10;
-    Prompt := Prompt + 'Fix these errors, then call the buildProject tool to verify the build.';
+    Prompt := Prompt + 'Fix these errors, then build the project again (buildProject tool of the delphi MCP server) to verify.';
   finally
     V.Free;
   end;
@@ -582,6 +652,146 @@ begin
     Frame.PasteInput(Prompt);
     Frame.FocusTerminal;
   end;
+end;
+
+{ Requests from the context menus }
+
+function TClaudeCodeWizard.SessionFrame: TClaudeTerminalFrame;
+begin
+  Result := ClaudePanelFrame;
+  if (Result = nil) or not Result.SessionRunning then
+  begin
+    ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.');
+    Result := nil;
+  end;
+end;
+
+procedure TClaudeCodeWizard.SendToClaude(const Text: string; Submit: Boolean);
+var
+  Frame: TClaudeTerminalFrame;
+begin
+  Frame := SessionFrame;
+  if Frame = nil then
+    Exit;
+  ShowClaudePanel;
+  Frame.PasteInput(Text, Submit);
+  Frame.FocusTerminal;
+end;
+
+{ "@path#L10-20" as Claude Code reads it: relative to the session folder when inside it. }
+function TClaudeCodeWizard.FileRef(const Path: string; Line1, Line2: Integer): string;
+var
+  Base, P: string;
+begin
+  P := Path;
+  Base := '';
+  if ClaudePanelFrame <> nil then
+    Base := ClaudePanelFrame.SessionDir;
+  if Base <> '' then
+  begin
+    Base := IncludeTrailingPathDelimiter(Base);
+    if SameText(Copy(P, 1, Length(Base)), Base) then
+      P := Copy(P, Length(Base) + 1, MaxInt);
+  end;
+  P := StringReplace(P, '\', '/', [rfReplaceAll]);
+  if Line1 > 0 then
+  begin
+    P := P + '#L' + IntToStr(Line1);
+    if Line2 > Line1 then
+      P := P + '-' + IntToStr(Line2);
+  end;
+  if P.Contains(' ') then
+    Result := '@"' + P + '"'
+  else
+    Result := '@' + P;
+end;
+
+// Request templates; "{ref}" is replaced by the @-reference. Each can be overridden in
+// ~/.claude/delphi-prompts.json, e.g. "explain": "Поясни цей код: {ref}".
+function TClaudeCodeWizard.PromptTemplate(const Command: string): string;
+var
+  FileName, Text: string;
+  V: TJSONValue;
+begin
+  if Command = ecExplain then
+    Result := 'Explain what this code does, how it fits into the unit, and anything non-obvious: {ref}'
+  else if Command = ecRefactor then
+    Result := 'Refactor this code for readability and maintainability without changing its behavior: {ref}'
+  else if Command = ecReview then
+    Result := 'Review this code for bugs: wrong logic, resource leaks, missing try/finally, exception safety, ' +
+      'threading and off-by-one errors. List concrete problems with line numbers and how to fix them: {ref}'
+  else if Command = ecTest then
+    Result := 'Write DUnitX unit tests for this code. Follow the test conventions already used in the project; ' +
+      'create a test unit if there is none: {ref}'
+  else if Command = ecDoc then
+    Result := 'Add XML documentation comments (/// <summary>, <param>, <returns>) to the declarations in this code: {ref}'
+  else
+    Result := '{ref} ';
+  FileName := TPath.Combine(ExtractFileDir(ClaudeIdeLockDir), 'delphi-prompts.json');
+  if FileExists(FileName) and ReadTextFileAutoEnc(FileName, Text) then
+  begin
+    V := TJSONObject.ParseJSONValue(Text);
+    try
+      if (V is TJSONObject) and (JsonStr(TJSONObject(V), Command) <> '') then
+        Result := JsonStr(TJSONObject(V), Command);
+    finally
+      V.Free;
+    end;
+  end;
+end;
+
+procedure TClaudeCodeWizard.EditorCommand(const Command: string);
+var
+  Sel: TSelectionInfo;
+  Line1, Line2: Integer;
+begin
+  Sel := FBackend.CurrentSelection(False);
+  if not Sel.Valid then
+    Exit;
+  Line1 := Sel.StartLine + 1;
+  Line2 := Sel.EndLine + 1;
+  // A selection ending at column 0 does not include that line.
+  if (Sel.EndChar = 0) and (Line2 > Line1) then
+    Dec(Line2);
+  SendToClaude(StringReplace(PromptTemplate(Command), '{ref}', FileRef(Sel.FilePath, Line1, Line2),
+    [rfReplaceAll]), Command <> ecAsk);
+end;
+
+procedure TClaudeCodeWizard.AddToContext(const Files: TArray<string>);
+var
+  Refs, F: string;
+begin
+  Refs := '';
+  for F in Files do
+    if DirectoryExists(F) then
+      Refs := Refs + FileRef(IncludeTrailingPathDelimiter(F), 0, 0) + ' '
+    else
+      Refs := Refs + FileRef(F, 0, 0) + ' ';
+  if Refs <> '' then
+    SendToClaude(Refs, False);
+end;
+
+procedure TClaudeCodeWizard.ExplainStopExecute(Sender: TObject);
+var
+  Frame: TClaudeTerminalFrame;
+  Prompt: string;
+begin
+  Frame := ClaudePanelFrame;
+  if (Frame = nil) or not Frame.SessionRunning then
+  begin
+    ShowMessage('Start Claude Code first: Tools > Claude Code > Open Claude Code.');
+    Exit;
+  end;
+  Prompt := DebugStopPrompt;
+  if Prompt = '' then
+  begin
+    ShowMessage('The debugged program is not stopped (no breakpoint, exception or pause).');
+    Exit;
+  end;
+  // Pasted, not submitted: the user can add what they expected and press Enter.
+  ShowClaudePanel;
+  Frame.PasteInput(Prompt);
+  Frame.FocusTerminal;
 end;
 
 procedure TClaudeCodeWizard.RestartExecute(Sender: TObject);
@@ -602,6 +812,8 @@ begin
       [FMcp.Port, FMcp.ClientCount, FMcp.LockFile])
   else
     S := 'Server: not running';
+  if FMcp.McpConfigFile <> '' then
+    S := S + #13#10'Delphi tools (--mcp-config): ' + FMcp.McpConfigFile;
   S := S + #13#10'Workspace folders: ' + string.Join('; ', FBackend.WorkspaceFolders) +
     #13#10'Panel command: ' + ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND) +
     #13#10'External console command: ' + ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND) +
@@ -616,15 +828,19 @@ end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);
 var
-  Values: array[0..1] of string;
+  Values: array[0..2] of string;
 begin
   Values[0] := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
   Values[1] := ReadSetting('LaunchCommand', DEFAULT_CONSOLE_COMMAND);
+  Values[2] := ReadSetting('SyncEditor', '1');
   if InputQuery('Claude Code Settings',
-    ['Command run in the Claude Code panel:', 'Command for "Open in External Console":'], Values) then
+    ['Command run in the Claude Code panel:', 'Command for "Open in External Console":',
+     'Apply Claude''s file changes to open editors (1 = on, 0 = off):'], Values) then
   begin
     WriteSetting('PanelCommand', Trim(Values[0]));
     WriteSetting('LaunchCommand', Trim(Values[1]));
+    WriteSetting('SyncEditor', Trim(Values[2]));
+    FBackend.Sync.Enabled := Trim(Values[2]) <> '0';
   end;
 end;
 

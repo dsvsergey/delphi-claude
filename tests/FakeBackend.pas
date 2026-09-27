@@ -51,6 +51,8 @@ begin
   end
   else if Name = 'echo' then
     Done(TToolResult.Ok([Args.ToJSON]))
+  else if Name = 'getProjectInfo' then
+    Done(TToolResult.Ok(['{"project":{"name":"Fake"}}']))
   else if Name = 'closeAllDiffTabs' then
     Done(TToolResult.Ok(['CLOSED_0_DIFF_TABS']))
   else
