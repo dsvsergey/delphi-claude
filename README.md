@@ -7,6 +7,8 @@ An IDE integration package that does for Delphi what the Claude Code extension d
 - Claude sees the Delphi editor, gets the current selection, opens files
   and shows proposed changes as a diff that you accept or reject in the IDE.
 
+![Claude Code panel in RAD Studio: Claude deletes the selected buttons from the form through the Delphi tools](docs/images/panel-form-designer.png)
+
 ## How it works
 
 It uses the same protocol as the VS Code, JetBrains and Neovim integrations:
@@ -70,6 +72,8 @@ The panel works the same way as the VS Code integrated terminal:
 Panel buttons: **New Session**, **Continue** (`claude --continue`), **Resume...** (`claude --resume`), **Stop**, **+** (new tab), **x** (close tab).
 After a session ends, pressing Enter in the panel starts a new one.
 
+![Claude Code panel with a session tab per project next to the code editor](docs/images/panel-tabs.png)
+
 **Tabs.** Each tab is a separate Claude Code session. **Open Claude Code** switches to the tab of the active project's folder (or opens one); **+** opens a new tab for the current project, **x** or a middle-click closes a tab (and stops its session). A tab shows `●` while Claude works and `!` when it waits for you; the toolbar buttons and **Send Selection** / context menu requests act on the active tab.
 
 Keyboard in the panel:
@@ -117,6 +121,8 @@ Menu **Tools → Claude Code**:
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
 - **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, and whether context-menu requests are sent right away.
 
+  ![Settings dialog](docs/images/settings.png)
+
 ### Context menus
 
 - **Code editor → Claude Code**: *Explain*, *Refactor*, *Find Bugs*, *Write DUnitX Test*, *Add XML Documentation*
@@ -138,6 +144,8 @@ When Claude proposes an edit, a diff window opens:
 The diff window shows the changed part of each line highlighted, unified or **side by side** (the choice is remembered).
 Single changes can be skipped: **Space** or double-click takes/skips the change under the cursor, **N** / **P** move
 between changes; Accept writes only the taken changes (taking none is a rejection).
+
+![Diff window: the proposed change to Unit1.pas, changes can be taken or skipped one by one](docs/images/diff-window.png)
 
 ### Files Claude changes on disk
 
