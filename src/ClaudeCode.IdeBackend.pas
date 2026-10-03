@@ -6,8 +6,11 @@ unit ClaudeCode.IdeBackend;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build,
+  System.SysUtils, System.Classes, System.JSON, Vcl.Forms, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build,
   ClaudeCode.EditorSync, ClaudeCode.Process, ClaudeCode.TestRunner, ClaudeCode.Timeline;
+
+{ Gives a form of ours the IDE theme (its class is registered first: unregistered classes stay unthemed). }
+procedure ThemeIdeForm(F: TForm);
 
 type
   TSelectionInfo = record
@@ -83,7 +86,7 @@ function FindProject(const Name: string): IOTAProject;
 implementation
 
 uses
-  System.Generics.Collections, System.Generics.Defaults, System.Math, Vcl.Forms,
+  System.Generics.Collections, System.Generics.Defaults, System.Math,
   ClaudeCode.Utils, ClaudeCode.DiffForm, ClaudeCode.TextSync, ClaudeCode.FormTools, ClaudeCode.DebugTools,
   ClaudeCode.FileHistory, ClaudeCode.CodeTools, ClaudeCode.PascalIndex, ClaudeCode.AppAutomation,
   System.IOUtils, System.StrUtils, Winapi.Windows, Winapi.ActiveX, Vcl.Graphics, ClaudeCode.ProjectMap,
@@ -95,6 +98,17 @@ const
 function ToolGetUnitDependencies(Args: TJSONObject): TToolResult; forward;
 function WarningsSummary(const BuildJson: string; MaxPerCode: Integer; const BaseDir: string): string; forward;
 function ToolGetMemoryLeaks(Args: TJSONObject): TToolResult; forward;
+
+procedure ThemeIdeForm(F: TForm);
+var
+  Theming: IOTAIDEThemingServices;
+begin
+  if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
+  begin
+    Theming.RegisterFormClass(TCustomFormClass(F.ClassType));
+    Theming.ApplyTheme(F);
+  end;
+end;
 
 function IdeThemeIsDark: Boolean;
 var
@@ -577,7 +591,7 @@ begin
     Done(ToolGetUnitDependencies(Args))
   else if Name = 'showTimeline' then
   begin
-    ShowTimeline(FTimeline, True, nil);
+    ShowTimeline(FTimeline, True, ThemeIdeForm);
     Done(TToolResult.Ok([Format('The Claude Timeline is open in the IDE for the user (%d turn(s) recorded).', [FTimeline.Count])]));
   end
   else if Name = 'showProjectMap' then
