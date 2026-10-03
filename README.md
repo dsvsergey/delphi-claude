@@ -185,6 +185,10 @@ report each request, each file about to be edited and the end of each turn to th
 **Tools → Claude Code → Claude Timeline** lists the turns with their files and changed lines; **Show Diff** shows what
 a turn did to a file, **Rewind to Before This Turn** puts every file changed in that turn or later back exactly as it
 was (open editors change in place and can be undone with Ctrl+Z). Claude's conversation itself is not changed.
+The IDE answers a hook only after it has handled it, so a file is copied before Claude writes it (if the IDE is busy
+for more than 5 seconds, Claude goes on without waiting). The hooks settings file
+(`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) is removed when the IDE closes; files left by an IDE that
+crashed are removed at the next start.
 
 ### Files Claude changes on disk
 
@@ -241,6 +245,7 @@ src/ClaudeCode.Timeline.pas       turns and file snapshots from Claude Code hook
 src/ClaudeCode.TimelineForm.pas   Claude Timeline window
 src/ClaudeCode.InlineDiff.pas     reviewing proposed changes in the code editor
 tests/e2e/                        sample project group for end-to-end tests in a real IDE
+tests/e2e-test.mjs                end-to-end test of the tools in a running IDE with tests/e2e open
 tests/mcp-call.mjs, ide-call.mjs  call one tool of a running IDE (delphi server / IDE channel)
 tests/TestHost.dpr                console host with a fake backend
 tests/protocol-test.mjs           protocol test (Node, raw WebSocket)
@@ -280,6 +285,16 @@ The lock file `%USERPROFILE%\.claude\ide\<port>.lock` of that instance has the p
 `node tests/ide-call.mjs <port> <token> openDiff '{...}'` and so on. `CLAUDE_DELPHI_LOGFILE` makes the package write
 its log to a file.
 
+The whole suite (about 90 checks, 10–15 minutes) runs against such an instance:
+
+```bat
+node tests/e2e-test.mjs <port> <token> <folder of the opened copy of tests\e2e> <bds.exe PID> [sections]
+```
+
+Sections (comma-separated, all by default): `code`, `tests`, `forms`, `debug`, `app`, `project`, `db`, `modernize`,
+`inline`, `timeline`, `prompts`. Open a copy of `tests/e2e`, not the folder itself: the test edits, restores and
+deletes files there, runs the program and clicks through IDE windows (Project Map, Claude Timeline, confirmations).
+
 ## Limitations
 
 - `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.
@@ -290,6 +305,6 @@ its log to a file.
 - Call stack frames are named from the source (the method around the line), not by the debugger: formatting the debugger's frame headers makes the Delphi 13 debugger kernel assert.
 - Logpoints are breakpoints that stop and continue the program: fine for events and loops of hundreds of iterations, slow for very hot code (use `maxHits` or a condition).
 - `findSymbol`/`findReferences`/`renameSymbol` read the code, not the compiler's symbol tables: names are matched, not resolved (overloads and same-named members of other classes match too; that is why rename has a dry run). Conditional compilation is ignored.
-- `getAppUI`/`appAction` need UI Automation: VCL windowed controls are exposed well, graphic controls (TLabel, TSpeedButton) and FMX only partly; then x/y on the picture from `captureApp` works. Keys are posted to the focused control (Ctrl/Alt shortcuts may not reach the program).
+- `getAppUI`/`appAction` need UI Automation: VCL windowed controls are exposed well, graphic controls (TLabel, TSpeedButton) and FMX only partly; then x/y on the picture from `captureApp` works. Keys are posted to the focused control (Ctrl/Alt shortcuts may not reach the program); after Enter, Tab, Esc or Backspace followed by more text the keys pause for 100 ms so they arrive in order. While a logpoint holds the program for a moment, `captureApp`, `getAppUI` and `appAction` wait (up to 5 s) instead of failing.
 - Database tools support FireDAC connections (with the drivers installed in the IDE).
 - The timeline records files changed through Claude's Edit/Write/MultiEdit tools; files changed by shell commands are not recorded.

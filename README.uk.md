@@ -184,6 +184,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 **Tools → Claude Code → Claude Timeline** показує ходи з файлами та зміненими рядками; **Show Diff** — що хід зробив із
 файлом, **Rewind to Before This Turn** повертає кожен файл, змінений у цьому ході чи пізніше, точно таким, яким він був
 (відкриті вкладки змінюються на місці, Ctrl+Z скасовує). Сама розмова з Claude не змінюється.
+IDE відповідає на хук лише після його обробки, тож копія файлу знімається до того, як Claude його запише (якщо IDE
+зайнята довше 5 секунд, Claude продовжує, не чекаючи). Файл налаштувань хуків
+(`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) видаляється під час закриття IDE; файли, що лишилися після
+аварійного завершення, прибираються під час наступного запуску.
 
 ### Файли, які Claude змінює на диску
 
@@ -240,6 +244,7 @@ src/ClaudeCode.Timeline.pas       ходи та знімки файлів із �
 src/ClaudeCode.TimelineForm.pas   вікно Claude Timeline
 src/ClaudeCode.InlineDiff.pas     перегляд запропонованих змін у редакторі коду
 tests/e2e/                        група проєктів для наскрізних тестів у справжній IDE
+tests/e2e-test.mjs                наскрізний тест інструментів у запущеній IDE з відкритою tests/e2e
 tests/mcp-call.mjs, ide-call.mjs  виклик одного інструмента запущеної IDE (сервер delphi / IDE-канал)
 tests/TestHost.dpr             консольний хост із фейковим бекендом
 tests/protocol-test.mjs        тест протоколу (Node, «сирий» WebSocket)
@@ -278,6 +283,16 @@ bds.exe -rClaudeDev -ns tests\e2e\Orders.groupproj
 `node tests/mcp-call.mjs <port> <token> runTests`, `... getUnitOutline '{"unit":"OrderLogic"}'`,
 `node tests/ide-call.mjs <port> <token> openDiff '{...}'` тощо. `CLAUDE_DELPHI_LOGFILE` вмикає журнал пакета у файл.
 
+Повний набір (близько 90 перевірок, 10–15 хвилин) проганяється на такому екземплярі:
+
+```bat
+node tests/e2e-test.mjs <port> <token> <тека відкритої копії tests\e2e> <PID bds.exe> [розділи]
+```
+
+Розділи (через кому, за замовчуванням усі): `code`, `tests`, `forms`, `debug`, `app`, `project`, `db`, `modernize`,
+`inline`, `timeline`, `prompts`. Відкривайте копію `tests/e2e`, а не саму теку: тест змінює, відновлює й видаляє там
+файли, запускає програму й натискає кнопки у вікнах IDE (Project Map, Claude Timeline, підтвердження).
+
 ## Обмеження
 
 - `getDiagnostics` повертає дані Error Insight (LSP) для відкритих файлів; справжній вивід компілятора дає `buildProject`.
@@ -288,6 +303,6 @@ bds.exe -rClaudeDev -ns tests\e2e\Orders.groupproj
 - Кадри стеку викликів називаються з коду (метод навколо рядка), а не дебагером: форматування заголовків кадрів дебагером викликає assert ядра дебагера Delphi 13.
 - Logpoints — це точки зупину, які зупиняють і відпускають програму: підходять для подій і циклів у сотні ітерацій, повільні для дуже «гарячого» коду (`maxHits` або умова).
 - `findSymbol`/`findReferences`/`renameSymbol` читають код, а не таблиці символів компілятора: імена порівнюються, а не розв'язуються (перевантаження й однойменні члени інших класів теж збігаються — тому в rename є dry run). Умовна компіляція ігнорується.
-- `getAppUI`/`appAction` потребують UI Automation: віконні VCL-контроли видно добре, графічні (TLabel, TSpeedButton) і FMX — частково; тоді працюють x/y на знімку з `captureApp`. Клавіші надсилаються контролу у фокусі (комбінації з Ctrl/Alt можуть не дійти).
+- `getAppUI`/`appAction` потребують UI Automation: віконні VCL-контроли видно добре, графічні (TLabel, TSpeedButton) і FMX — частково; тоді працюють x/y на знімку з `captureApp`. Клавіші надсилаються контролу у фокусі (комбінації з Ctrl/Alt можуть не дійти); якщо після Enter, Tab, Esc чи Backspace іде ще текст, робиться пауза 100 мс, щоб клавіші дійшли по черзі. Поки logpoint на мить тримає програму, `captureApp`, `getAppUI` і `appAction` чекають (до 5 с), а не повертають помилку.
 - Інструменти бази даних працюють із FireDAC-з'єднаннями (з драйверами, встановленими в IDE).
 - Таймлайн бачить файли, змінені інструментами Edit/Write/MultiEdit Claude; зміни shell-командами не записуються.
