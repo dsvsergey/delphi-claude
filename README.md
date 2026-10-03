@@ -127,6 +127,8 @@ If Delphi is installed elsewhere: `build.bat "C:\path\to\Studio\37.0"`.
 
 Menu **Tools → Claude Code**:
 
+![Tools → Claude Code menu](docs/images/claude-menu.png)
+
 - **Open Claude Code** (`Ctrl+Shift+Alt+C`): opens the Claude Code panel and starts `claude` in the active project folder.
   Claude gets `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` and connects to the IDE automatically.
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
@@ -134,7 +136,13 @@ Menu **Tools → Claude Code**:
 - **Explain Debugger Stop with Claude**: when the debugged program is stopped (breakpoint, exception, pause), pastes the exception, the current line with its source and the call stack into the Claude panel as a request.
 - **Make Tests Pass with Claude**: runs the DUnitX tests (`runTests`) and, if some fail, pastes them into the panel with the request to fix the code and run the tests again until they pass.
 - **Project Map...**: the unit dependency graph in a window: size, forms and data modules, cycles; click a unit for what it uses and what uses it, double-click to open it, **Ask Claude** to get it explained.
+
+  ![Project Map: the units of the sample project group, OrderLogic selected with what uses it](docs/images/project-map.png)
+
 - **Modernize Project with Claude...**: choose Win64, Unicode, database (BDE/dbExpress/ADO to FireDAC), compiler warnings or memory leaks; Claude analyzes the project and fixes it in batches with a build after each one.
+
+  ![Modernize Project dialog](docs/images/modernize.png)
+
 - **Claude Timeline...**: Claude's turns with the files each one changed (see below).
 - **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
@@ -178,6 +186,8 @@ and the buttons **Previous / Next** (`Ctrl+Alt+PgUp/PgDn`), **Undo this change**
 is always the difference from the original. Accept saves the file and answers Claude with the text as it is; Reject puts
 the original back byte for byte. Forms, project files, new files and tabs with unsaved changes still use the diff window.
 
+![Review in the code editor: change 2 of 3, the removed line is shown in the bar, added lines are green](docs/images/inline-review.png)
+
 ### Claude Timeline
 
 With **Settings… → Record Claude's turns**, sessions started from the IDE get Claude Code hooks (`--settings`) that
@@ -189,6 +199,8 @@ The IDE answers a hook only after it has handled it, so a file is copied before 
 for more than 5 seconds, Claude goes on without waiting). The hooks settings file
 (`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) is removed when the IDE closes; files left by an IDE that
 crashed are removed at the next start.
+
+![Claude Timeline: three turns, the selected one changed MainForm.pas and created CHANGES.md](docs/images/timeline.png)
 
 ### Files Claude changes on disk
 

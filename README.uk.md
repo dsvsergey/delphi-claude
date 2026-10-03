@@ -126,6 +126,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 Меню **Tools → Claude Code**:
 
+![Меню Tools → Claude Code](docs/images/claude-menu.png)
+
 - **Open Claude Code** (`Ctrl+Shift+Alt+C`): відкриває панель Claude Code і запускає `claude` у теці активного проєкту.
   Claude отримує `CLAUDE_CODE_SSE_PORT` / `ENABLE_IDE_INTEGRATION` і підключається до IDE сам.
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
@@ -133,7 +135,13 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Explain Debugger Stop with Claude**: коли програма під налагодженням зупинена (breakpoint, виняток, пауза), вставляє в панель Claude виняток, поточний рядок із кодом і стек викликів як запит.
 - **Make Tests Pass with Claude**: запускає DUnitX-тести (`runTests`) і, якщо є упалі, вставляє їх у панель із проханням виправити код і запускати тести, доки всі не пройдуть.
 - **Project Map...**: граф залежностей юнітів у вікні: розміри, форми й дата-модулі, цикли; клік — що юніт використовує і хто використовує його, подвійний клік — відкрити, **Ask Claude** — пояснення.
+
+  ![Project Map: юніти тестової групи проєктів, вибрано OrderLogic і те, що його використовує](docs/images/project-map.png)
+
 - **Modernize Project with Claude...**: вибір Win64, Unicode, бази даних (BDE/dbExpress/ADO → FireDAC), попереджень компілятора або витоків пам'яті; Claude аналізує проєкт і виправляє його порціями зі збіркою після кожної.
+
+  ![Діалог Modernize Project](docs/images/modernize.png)
+
 - **Claude Timeline...**: ходи Claude з файлами, які змінив кожен (див. нижче).
 - **Create CLAUDE.md for Project...**: записує в `CLAUDE.md` проєкту розділ «Delphi project» (тип, framework, платформи, команда збірки, кодування юнітів, форми, DUnitX-проєкти, коли використовувати `mcp__delphi__*`). Генерується лише частина між `<!-- delphi:begin -->` і `<!-- delphi:end -->`; спершу ви переглядаєте її у вікні diff.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
@@ -177,6 +185,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 поточним текстом; Reject повертає оригінал байт у байт. Форми, файли проєкту, нові файли та вкладки з незбереженими змінами
 й далі відкриваються у вікні diff.
 
+![Перегляд у редакторі коду: зміна 2 з 3, видалений рядок показано на панелі, додані рядки зелені](docs/images/inline-review.png)
+
 ### Claude Timeline
 
 З **Settings… → Record Claude's turns** сесії, запущені з IDE, отримують хуки Claude Code (`--settings`), які
@@ -188,6 +198,8 @@ IDE відповідає на хук лише після його обробки
 зайнята довше 5 секунд, Claude продовжує, не чекаючи). Файл налаштувань хуків
 (`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) видаляється під час закриття IDE; файли, що лишилися після
 аварійного завершення, прибираються під час наступного запуску.
+
+![Claude Timeline: три ходи, вибраний змінив MainForm.pas і створив CHANGES.md](docs/images/timeline.png)
 
 ### Файли, які Claude змінює на диску
 
