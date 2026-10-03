@@ -16,6 +16,8 @@ uses
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
+  ClaudeCode.ProjectMap, ClaudeCode.ProjectMapForm, ClaudeCode.CodeTools, ClaudeCode.Prompts,
+  ClaudeCode.ModernizeForm, ClaudeCode.TimelineForm,
   System.IOUtils;
 
 const
@@ -66,8 +68,13 @@ type
     procedure SaveSettings(const S: TClaudeSettings);
     procedure BuildFixExecute(Sender: TObject);
     procedure BuildFixDone(const R: TToolResult);
+    procedure TestsFixExecute(Sender: TObject);
+    procedure TestsFixDone(const R: TToolResult);
     procedure ExplainStopExecute(Sender: TObject);
     procedure ClaudeMdExecute(Sender: TObject);
+    procedure ProjectMapExecute(Sender: TObject);
+    procedure ModernizeExecute(Sender: TObject);
+    procedure TimelineExecute(Sender: TObject);
     function SessionFrame: TClaudeTerminalFrame;
     procedure SendToClaude(const Text: string; Submit: Boolean);
     function FileRef(const Path: string; Line1, Line2: Integer): string;
@@ -89,6 +96,19 @@ begin
   RegisterPackageWizard(TClaudeCodeWizard.Create);
 end;
 
+{ True with a dark IDE theme. }
+function IdeIsDark: Boolean;
+var
+  Theming: IOTAIDEThemingServices;
+  Bg: TColor;
+begin
+  Bg := clWindow;
+  if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
+    Bg := Theming.StyleServices.GetSystemColor(clWindow);
+  Bg := ColorToRGB(Bg);
+  Result := (GetRValue(Bg) * 299 + GetGValue(Bg) * 587 + GetBValue(Bg) * 114) div 1000 < 128;
+end;
+
 { TClaudeCodeWizard }
 
 constructor TClaudeCodeWizard.Create;
@@ -102,6 +122,12 @@ begin
   FBackendIntf := FBackend;
   FMcp := TMcpServer.Create(FBackendIntf);
   FMcp.OnClientsChanged := ClientsChanged;
+  FMcp.OnHook :=
+    procedure(Json: string)
+    begin
+      Log('Hook: ' + Copy(Json, 1, 160));
+      FBackend.Timeline.HandleHook(Json);
+    end;
   StartServer;
 
   FSelTimer := TTimer.Create(nil);
@@ -113,6 +139,7 @@ begin
 
   CreateMenu;
   FBackend.Sync.Enabled := LoadSettings.SyncEditor;
+  FBackend.InlineDiff := LoadSettings.InlineDiff;
   FContextMenus := TClaudeContextMenus.Create(
     function: Boolean
     begin
@@ -125,6 +152,13 @@ begin
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
   RegisterClaudePanel;
+  ProjectMapAsk :=
+    procedure(UnitName, FileName: string)
+    begin
+      SendToClaude(Format('Explain the role of unit %s (%s) in this project: what it is responsible for, how it ' +
+        'works with the units it uses and the units that use it (mcp__delphi__getUnitDependencies), and anything ' +
+        'that looks wrong in its dependencies or size.', [UnitName, FileRef(FileName, 0, 0)]), False);
+    end;
 end;
 
 destructor TClaudeCodeWizard.Destroy;
@@ -137,10 +171,13 @@ begin
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
   DestroyAllDiffForms;
+  DestroyProjectMapWindow;
+  DestroyTimelineWindow;
   FBackend.Shutdown; // a running build must not answer through a freed server
   if FMcp <> nil then
   begin
     FMcp.OnClientsChanged := nil;
+    FMcp.OnHook := nil;
     FMcp.Stop;
     FreeAndNil(FMcp);
   end;
@@ -246,6 +283,9 @@ var
 begin
   S := LoadSettings;
   Result := S.CommandArgs;
+  // Hooks that report turns and file edits to the IDE (Claude Timeline).
+  if S.Timeline and FMcp.Running and (FMcp.HookSettingsFile <> '') then
+    Result := Trim(Result + ' --settings "' + FMcp.HookSettingsFile + '"');
   // Registers the "delphi" MCP server (build, project, designer and debugger tools) for this session.
   // Last, because --mcp-config takes every following value that is not an option.
   if S.DelphiTools and FMcp.Running and (FMcp.McpConfigFile <> '') then
@@ -400,8 +440,12 @@ begin
   AddItem(NewAction('ClaudeCodeConsoleAction', 'Open in External Console', '', OpenConsoleExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeBuildFixAction', 'Build and Fix Errors with Claude', '', BuildFixExecute));
+  AddItem(NewAction('ClaudeCodeTestsFixAction', 'Make Tests Pass with Claude', '', TestsFixExecute));
   AddItem(NewAction('ClaudeCodeExplainStopAction', 'Explain Debugger Stop with Claude', '', ExplainStopExecute));
   AddItem(NewAction('ClaudeCodeClaudeMdAction', 'Create CLAUDE.md for Project...', '', ClaudeMdExecute));
+  AddItem(NewAction('ClaudeCodeProjectMapAction', 'Project Map...', '', ProjectMapExecute));
+  AddItem(NewAction('ClaudeCodeModernizeAction', 'Modernize Project with Claude...', '', ModernizeExecute));
+  AddItem(NewAction('ClaudeCodeTimelineAction', 'Claude Timeline...', '', TimelineExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
@@ -731,6 +775,85 @@ begin
   end;
 end;
 
+procedure TClaudeCodeWizard.TestsFixExecute(Sender: TObject);
+var
+  Args: TJSONObject;
+begin
+  if SessionFrame = nil then
+    Exit;
+  Args := TJSONObject.Create;
+  try
+    FBackend.ExecuteTool('runTests', Args, TestsFixDone);
+  finally
+    Args.Free;
+  end;
+end;
+
+procedure TClaudeCodeWizard.TestsFixDone(const R: TToolResult);
+const
+  MAX_LISTED = 20;
+var
+  V: TJSONValue;
+  Obj, F: TJSONObject;
+  Failures: TJSONArray;
+  Prompt, Loc: string;
+  I: Integer;
+begin
+  if R.IsError or (Length(R.Texts) = 0) then
+  begin
+    if Length(R.Texts) > 0 then
+      ShowMessage('Tests could not be run: ' + R.Texts[0]);
+    Exit;
+  end;
+  V := TJSONObject.ParseJSONValue(R.Texts[0]);
+  try
+    // Not JSON: the test project did not compile; hand Claude the build result instead.
+    if not (V is TJSONObject) then
+    begin
+      Prompt := string.Join(#10, R.Texts) + #10 +
+        'Fix the build errors of the test project, then run the tests with mcp__delphi__runTests until they all pass.';
+      SendToClaude(Prompt, False);
+      Exit;
+    end;
+    Obj := TJSONObject(V);
+    if JsonBool(Obj, 'success', False) then
+    begin
+      ShowMessage('All tests pass. ' + JsonStr(Obj, 'summary'));
+      Exit;
+    end;
+    Prompt := Format('The tests of %s fail: %s', [ExtractFileName(JsonStr(Obj, 'project')),
+      JsonStr(Obj, 'summary')]) + #10;
+    if JsonStr(Obj, 'error') <> '' then
+      Prompt := Prompt + JsonStr(Obj, 'error') + #10;
+    if Obj.GetValue('failures') is TJSONArray then
+    begin
+      Failures := TJSONArray(Obj.GetValue('failures'));
+      for I := 0 to Failures.Count - 1 do
+      begin
+        if I = MAX_LISTED then
+        begin
+          Prompt := Prompt + '...' + #10;
+          Break;
+        end;
+        F := Failures.Items[I] as TJSONObject;
+        Loc := '';
+        if JsonStr(F, 'file') <> '' then
+          Loc := Format(' (%s:%s)', [FileRef(JsonStr(F, 'file'), 0, 0).TrimLeft(['@']), JsonStr(F, 'line')]);
+        Prompt := Prompt + Format('- %s%s [%s]: %s', [JsonStr(F, 'test'), Loc, JsonStr(F, 'status'),
+          JsonStr(F, 'message')]) + #10;
+      end;
+    end;
+    if JsonStr(Obj, 'outputTail') <> '' then
+      Prompt := Prompt + 'Test output:' + #10 + JsonStr(Obj, 'outputTail') + #10;
+    Prompt := Prompt + 'Find the cause in the code under test and fix it (change a test only when the test itself ' +
+      'is wrong). After each change run the tests again with mcp__delphi__runTests, until all of them pass.';
+  finally
+    V.Free;
+  end;
+  // Pasted, not submitted: the user can add what they know and press Enter.
+  SendToClaude(Prompt, False);
+end;
+
 { Requests from the context menus }
 
 function TClaudeCodeWizard.SessionFrame: TClaudeTerminalFrame;
@@ -895,6 +1018,46 @@ begin
   Form.ShowAndActivate;
 end;
 
+procedure TClaudeCodeWizard.ProjectMapExecute(Sender: TObject);
+begin
+  if not OpenProjectMap(IdeIsDark) then
+    ShowMessage('Open a project first.');
+end;
+
+procedure TClaudeCodeWizard.ModernizeExecute(Sender: TObject);
+var
+  Scenario: string;
+begin
+  if SessionFrame = nil then
+    Exit;
+  if not ChooseModernization(Scenario,
+    procedure(F: TForm)
+    var
+      Theming: IOTAIDEThemingServices;
+    begin
+      if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
+        Theming.ApplyTheme(F);
+    end) then
+    Exit;
+  // Pasted, not submitted: the user can add constraints (keep Win32, which units first...).
+  SendToClaude(PromptText('modernize', 'scenario', Scenario), False);
+end;
+
+procedure TClaudeCodeWizard.TimelineExecute(Sender: TObject);
+begin
+  ShowTimeline(FBackend.Timeline, LoadSettings.Timeline,
+    procedure(F: TForm)
+    var
+      Theming: IOTAIDEThemingServices;
+    begin
+      if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
+      begin
+        Theming.RegisterFormClass(TCustomFormClass(F.ClassType));
+        Theming.ApplyTheme(F);
+      end;
+    end);
+end;
+
 procedure TClaudeCodeWizard.ExplainStopExecute(Sender: TObject);
 var
   Frame: TClaudeTerminalFrame;
@@ -961,6 +1124,8 @@ begin
   Result.DelphiTools := ReadSetting('DelphiTools', '1') <> '0';
   Result.SyncEditor := ReadSetting('SyncEditor', '1') <> '0';
   Result.SubmitRequests := ReadSetting('SubmitRequests', '1') <> '0';
+  Result.Timeline := ReadSetting('Timeline', '1') <> '0';
+  Result.InlineDiff := ReadSetting('InlineDiff', '0') <> '0';
 end;
 
 procedure TClaudeCodeWizard.SaveSettings(const S: TClaudeSettings);
@@ -975,6 +1140,8 @@ begin
   WriteSetting('DelphiTools', Flag[S.DelphiTools]);
   WriteSetting('SyncEditor', Flag[S.SyncEditor]);
   WriteSetting('SubmitRequests', Flag[S.SubmitRequests]);
+  WriteSetting('Timeline', Flag[S.Timeline]);
+  WriteSetting('InlineDiff', Flag[S.InlineDiff]);
 end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);
@@ -993,6 +1160,7 @@ begin
   begin
     SaveSettings(S);
     FBackend.Sync.Enabled := S.SyncEditor;
+    FBackend.InlineDiff := S.InlineDiff;
   end;
 end;
 
