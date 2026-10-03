@@ -9,7 +9,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
   ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo, ClaudeCode.PascalIndex, ClaudeCode.TestRunner,
-  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline, ClaudeCode.BackgroundTasks,
+  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline, ClaudeCode.BackgroundTasks, ClaudeCode.DelphiLsp, System.Win.Registry,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -783,6 +783,70 @@ begin
   Writeln('BACKGROUND TASKS OK');
 end;
 
+procedure DelphiLspSelfTest;
+var
+  Reg: TRegistry;
+  Bds, Dir, Text, Err: string;
+  Lsp: TDelphiLsp;
+  Settings: TJSONObject;
+  Files: TJSONArray;
+  L: TLspLocation;
+  U: string;
+begin
+  // The real DelphiLSP.exe of the RAD Studio on this machine, on the e2e sample.
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_LOCAL_MACHINE;
+    Bds := '';
+    if Reg.OpenKeyReadOnly('SOFTWARE\WOW6432Node\Embarcadero\BDS\37.0') or
+       Reg.OpenKeyReadOnly('SOFTWARE\Embarcadero\BDS\37.0') then
+      Bds := Reg.ReadString('RootDir');
+  finally
+    Reg.Free;
+  end;
+  if (Bds = '') or not FileExists(TPath.Combine(Bds, 'bin\DelphiLSP.exe')) then
+  begin
+    Writeln('DELPHI LSP SKIPPED (no RAD Studio 13)');
+    Exit;
+  end;
+  Dir := TPath.GetFullPath(TPath.Combine(ExtractFilePath(ParamStr(0)), 'e2e'));
+  Settings := TJSONObject.Create;
+  Lsp := TDelphiLsp.Create(TPath.Combine(Bds, 'bin\DelphiLSP.exe'));
+  try
+    Files := TJSONArray.Create;
+    for U in ['OrderLogic', 'MainForm', 'OrdersData'] do
+      Files.Add(TJSONObject.Create.AddPair('name', U).AddPair('file', LspUri(TPath.Combine(Dir, U + '.pas'))));
+    Settings.AddPair('project', LspUri(TPath.Combine(Dir, 'OrdersApp.dproj')));
+    Settings.AddPair('dllname', 'dcc32370.dll');
+    Settings.AddPair('dccOptions', Format('-$D+ -NSSystem;Winapi;Vcl;Data;FireDAC -U"%slib\win32\release"',
+      [IncludeTrailingPathDelimiter(Bds)]));
+    Settings.AddPair('projectFiles', Files);
+    Settings.AddPair('includeDCUsInUsesCompletion', TJSONBool.Create(False));
+    Settings.AddPair('enableKeyWordCompletion', TJSONBool.Create(False));
+    Settings.AddPair('browsingPaths', TJSONArray.Create);
+    Expect(Lsp.Start(Dir, Settings, 'k', Err), 'DelphiLSP starts: ' + Err);
+    ReadTextFileAutoEnc(TPath.Combine(Dir, 'OrderLogic.pas'), Text);
+    Lsp.OpenText(TPath.Combine(Dir, 'OrderLogic.pas'), Text);
+    // "FLines" in "for I := 0 to FLines.Count - 2 do" (line 63) is the field declared on line 20.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 63, 18);
+    Expect(SameText(L.FileName, TPath.Combine(Dir, 'OrderLogic.pas')) and (L.Line = 20),
+      Format('definition of FLines: %s:%d', [L.FileName, L.Line]));
+    // Format comes from a unit without source here: a bare unit file name.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 74, 13);
+    Expect(SameText(L.FileName, 'System.SysUtils.pas') and (L.Line > 0), Format('definition of Format: %s:%d',
+      [L.FileName, L.Line]));
+    // A keyword has no definition.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 63, 3);
+    Expect(L.Line = 0, Format('no definition for "for": %s:%d', [L.FileName, L.Line]));
+    Lsp.Stop;
+    Expect(not Lsp.Running, 'DelphiLSP stops');
+  finally
+    Lsp.Free;
+    Settings.Free;
+  end;
+  Writeln('DELPHI LSP OK');
+end;
+
 procedure ConversationSelfTest;
 var
   Dir, Old: string;
@@ -831,6 +895,7 @@ begin
     TimelineSelfTest;
     ConversationSelfTest;
     BackgroundTaskSelfTest;
+    DelphiLspSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;

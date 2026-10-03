@@ -379,6 +379,7 @@ begin
   FDb.Cancel;
   FSync.Enabled := False;
   ShutdownDebugTools;
+  ShutdownCodeTools; // the DelphiLSP process
 end;
 
 function TDelphiIdeBackend.IdeName: string;
@@ -606,9 +607,9 @@ begin
   else if Name = 'findSymbol' then
     Done(ToolFindSymbol(Args))
   else if Name = 'findReferences' then
-    Done(ToolFindReferences(Args))
+    ToolFindReferencesAsync(Args, Done)
   else if Name = 'renameSymbol' then
-    Done(ToolRenameSymbol(Args))
+    ToolRenameSymbolAsync(Args, Done)
   else
     Done(TToolResult.Error('Unknown tool: ' + Name));
 end;

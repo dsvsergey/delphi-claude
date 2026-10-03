@@ -531,9 +531,13 @@ begin
   Result.Add(Tool('findReferences',
     'Find every use of an identifier in the project''s Delphi sources and text forms (.pas, .dpr, .inc, .dfm, ' +
     '.fmx: event handlers and component names too), outside comments and strings, with the line text and the ' +
-    'qualifier (Customer.Save). Matching is by name, not by type: same-named members of other classes match too.',
+    'qualifier (Customer.Save). The occurrences found by name are then checked by DelphiLSP (the compiler) and ' +
+    'grouped by the declaration each one refers to (TOrder.Save vs TCustomer.Save); what it cannot resolve (form ' +
+    'files, other projects) is listed apart.',
     Schema([
       TJSONPair.Create('name', Prop('string', 'Identifier; for TOrder.Save the name Save is searched')),
+      TJSONPair.Create('resolve', Prop('boolean', 'Check the occurrences with DelphiLSP (default true); false: ' +
+        'name matching only, faster')),
       TJSONPair.Create('files', ArrayProp('Only these files (paths or unit names); default: the project group')),
       TJSONPair.Create('maxResults', Prop('number', 'Default 300'))],
       ['name'])));
@@ -548,6 +552,8 @@ begin
       TJSONPair.Create('newName', Prop('string', 'New identifier')),
       TJSONPair.Create('files', ArrayProp('Only these files (paths or unit names); default: the project group')),
       TJSONPair.Create('dryRun', Prop('boolean', 'Only list the occurrences (default true)')),
+      TJSONPair.Create('declaration', Prop('string', 'Rename only the uses of this declaration, as findReferences ' +
+        'names it ("OrderLogic.pas:20"); DelphiLSP checks each occurrence')),
       TJSONPair.Create('only', ArrayProp('Occurrence ids from the dry run to change'))],
       ['name', 'newName'])));
 

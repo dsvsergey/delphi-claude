@@ -129,9 +129,19 @@ if (want('code')) {
   r = await call('findSymbol', { name: 'kNone' });
   check(r.text.startsWith('No declaration'), 'findSymbol: nothing found');
   r = await call('findReferences', { name: 'ButtonAddClick' });
-  check(/3 occurrence/.test(r.text) && /MainForm\.dfm \(1\)/.test(r.text), 'findReferences: code and form', r.text);
+  check(/3 occurrence/.test(r.text) && /method TFormMain\.ButtonAddClick \(MainForm\.pas:15\) - 2 occurrence/.test(r.text) &&
+    /Not resolved - 1[\s\S]*MainForm\.dfm:38/.test(r.text), 'findReferences: resolved by DelphiLSP, the form apart', r.text);
   r = await call('findReferences', { name: 'CalcTotal', files: ['OrderTests'] });
-  check(/2 occurrence\(s\) of CalcTotal in 1 file/.test(r.text), 'findReferences: files filter', r.text);
+  check(/2 occurrence\(s\) of CalcTotal/.test(r.text) && !/OrderLogic\.pas:\d+:/.test(r.text), 'findReferences: files filter', r.text);
+  r = await call('findReferences', { name: 'CalcTotal', files: ['OrderTests'], resolve: false });
+  check(/2 occurrence\(s\) of CalcTotal in 1 file/.test(r.text), 'findReferences: by name only', r.text);
+  // Create: TOrder's constructor apart from TObject.Create, TList.Create and the DUnitX loggers.
+  r = await call('findReferences', { name: 'Create' });
+  check(/method TOrder\.Create \(OrderLogic\.pas:23\) - 6 occurrence/.test(r.text) && /System\.pas:\d+ - 1/.test(r.text),
+    'findReferences: a common name split by declaration', r.text);
+  r = await call('renameSymbol', { name: 'Create', newName: 'CreateFor', declaration: 'OrderLogic.pas:23' });
+  check(/Dry run: renaming the uses of method TOrder\.Create/.test(r.text) && /6 occurrence\(s\) refer/.test(r.text) &&
+    !/inherited Create/.test(r.text), 'renameSymbol: one declaration only (dry run)', r.text);
   r = await call('renameSymbol', { name: 'CalcTotal', newName: 'begin' });
   check(r.isError, 'renameSymbol: a reserved word is refused');
   r = await call('renameSymbol', { name: 'CalcTotal', newName: 'Total' });

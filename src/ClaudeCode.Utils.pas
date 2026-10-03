@@ -27,6 +27,8 @@ procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
 procedure FlushMainLoop;
 
 function PathFromUri(const S: string): string;
+{ %XX escapes (UTF-8) decoded. }
+function PercentDecode(const S: string): string;
 function PathToUri(const Path: string): string;
 function LanguageIdForFile(const FileName: string): string;
 function ReadTextFileAutoEnc(const FileName: string; out Text: string): Boolean;

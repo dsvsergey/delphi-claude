@@ -60,8 +60,8 @@ as `mcp__delphi__*` and Claude asks for permission before using them like any MC
 | `runTests` | builds a DUnitX project (found in the group) and runs it: each failing test with its message and the file/line of the test method; also in the **Claude Tests** tab of Messages |
 | `pasteDfm` | creates components from DFM text the way Ctrl+V does in the designer: nested controls, collections, events; returns the real names |
 | `getUnitOutline` | a unit's structure with line ranges: uses, types and members, routines and method bodies |
-| `findSymbol` / `findReferences` | declarations and uses of a name in the project's sources and text forms, comments and strings skipped |
-| `renameSymbol` | renames across units and forms: a dry run lists the occurrences with ids, then exactly the chosen ones are changed (open files in the editor, undoable; closed files keep their encoding) |
+| `findSymbol` / `findReferences` | declarations and uses of a name in the project's sources and text forms, comments and strings skipped; `findReferences` has every use checked by DelphiLSP (the compiler) and groups them by the declaration they refer to (`TOrder.Create` apart from `TObject.Create`), form files apart |
+| `renameSymbol` | renames across units and forms: with `declaration` ("OrderLogic.pas:23", from `findReferences`) only the uses of that symbol, as DelphiLSP resolves them; a dry run lists the occurrences with ids, then exactly the chosen ones are changed (open files in the editor, undoable; closed files keep their encoding) |
 | `getUnitDependencies` / `showProjectMap` | how units use each other (largest, most used, cycles) / the interactive map for the user |
 | `captureApp` / `getAppUI` / `appAction` | the running program: pictures of its windows, its UI Automation tree, and click/type/set text like a user (the user's foreground window keeps the focus) |
 | `listConnections` / `getDatabaseSchema` / `runQuery` | the FireDAC connections of the project's forms, the schema behind them, and read-only queries (one SELECT, run in a transaction that is rolled back) |
@@ -252,6 +252,7 @@ src/ClaudeCode.Wizard.pas         IDE wizard: menu, timers, settings
 src/ClaudeCode.Process.pas        running console programs, background jobs (no ToolsAPI)
 src/ClaudeCode.PascalIndex.pas    Object Pascal tokenizer, declarations, occurrences, outlines (no ToolsAPI)
 src/ClaudeCode.CodeTools.pas      getUnitOutline, findSymbol, findReferences, renameSymbol
+src/ClaudeCode.DelphiLsp.pas      client of DelphiLSP.exe (textDocument/definition) for resolving names
 src/ClaudeCode.TestRunner.pas     running DUnitX executables, NUnit XML / console results (no ToolsAPI)
 src/ClaudeCode.AppAutomation.pas  window pictures, UI Automation tree and actions (no ToolsAPI)
 src/ClaudeCode.ProjectMap.pas     unit dependency graph and cycles (no ToolsAPI)
@@ -326,7 +327,7 @@ deletes files there, runs the program and clicks through IDE windows (Project Ma
 - The debugger API has no list of local variables: Claude reads the code around the current line and evaluates what it needs. Exception class/message come from evaluating `ExceptObject` (best effort).
 - Call stack frames are named from the source (the method around the line), not by the debugger: formatting the debugger's frame headers makes the Delphi 13 debugger kernel assert.
 - Logpoints are breakpoints that stop and continue the program: fine for events and loops of hundreds of iterations, slow for very hot code (use `maxHits` or a condition).
-- `findSymbol`/`findReferences`/`renameSymbol` read the code, not the compiler's symbol tables: names are matched, not resolved (overloads and same-named members of other classes match too; that is why rename has a dry run). Conditional compilation is ignored.
+- `findSymbol` reads the code, not the compiler's symbol tables. `findReferences` and `renameSymbol` find occurrences by name and then ask DelphiLSP (its own process, configured from the active project's search paths and the IDE library path) which declaration each one is; DelphiLSP has no find-references of its own, so a name used in thousands of places is checked only up to 600 occurrences / 90 s. Form files, units of other projects of the group and code the compiler cannot read stay "not resolved". Only Win32/Win64; the first check starts the server (a few seconds).
 - `getAppUI`/`appAction` need UI Automation: VCL windowed controls are exposed well, graphic controls (TLabel, TSpeedButton) and FMX only partly; then x/y on the picture from `captureApp` works. Keys are posted to the focused control (Ctrl/Alt shortcuts may not reach the program); after Enter, Tab, Esc or Backspace followed by more text the keys pause for 100 ms so they arrive in order. While a logpoint holds the program for a moment, `captureApp`, `getAppUI` and `appAction` wait (up to 5 s) instead of failing.
 - Database tools support FireDAC connections (with the drivers installed in the IDE).
 - The timeline records files changed through Claude's Edit/Write/MultiEdit tools; files changed by shell commands are not recorded.
