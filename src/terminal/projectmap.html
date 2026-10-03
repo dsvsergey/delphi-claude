@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Project Map</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1e1e1e; --muted: #6a6a6a; --panel: #f3f3f3; --line: #c8c8c8; --accent: #0a64c8; }
+  body.dark { --bg: #1e1e1e; --fg: #d4d4d4; --muted: #9a9a9a; --panel: #252526; --line: #4a4a4a; --accent: #4fa3ff; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px "Segoe UI", sans-serif; overflow: hidden; }
+  #bar { position: absolute; top: 0; left: 0; right: 0; height: 38px; display: flex; align-items: center; gap: 12px;
+         padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #bar input { width: 220px; padding: 4px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 4px; }
+  #stats { color: var(--muted); }
+  .legend { display: flex; gap: 10px; color: var(--muted); margin-left: auto; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; background: var(--c); vertical-align: -1px; }
+  /* A canvas is not stretched by left/right/bottom: it needs an explicit size. */
+  #map { position: absolute; top: 39px; left: 0; width: calc(100% - 300px); height: calc(100% - 39px); cursor: grab; display: block; }
+  #side { position: absolute; top: 39px; right: 0; width: 300px; bottom: 0; background: var(--panel); border-left: 1px solid var(--line);
+          overflow: auto; padding: 12px; box-sizing: border-box; }
+  #side h2 { margin: 0 0 4px; font-size: 16px; word-break: break-all; }
+  #side .meta { color: var(--muted); margin-bottom: 10px; }
+  #side h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; color: var(--muted); }
+  #side a { color: var(--accent); cursor: pointer; text-decoration: none; display: inline-block; margin: 0 6px 2px 0; }
+  #side .warn { color: #d13438; }
+  button { padding: 5px 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 4px; cursor: pointer; margin-right: 6px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #help { color: var(--muted); line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <input id="search" placeholder="Find unit..." autocomplete="off">
+  <span id="stats"></span>
+  <div class="legend">
+    <span style="--c:#e8912d">program</span><span style="--c:#3b82f6">form</span><span style="--c:#22a06b">data module</span>
+    <span style="--c:#8b8b8b">unit</span><span style="--c:#d13438">in a cycle</span>
+  </div>
+</div>
+<canvas id="map"></canvas>
+<div id="side"><div id="help">
+  <h2>Project map</h2>
+  Circles are units (area = lines of code), arrows point to the units they use: solid for <b>interface</b>
+  uses, dashed for <b>implementation</b> uses. Red marks units that depend on each other in a cycle.<br><br>
+  Click a unit for details, drag to move it, drag the background to pan, wheel to zoom.
+  Double-click opens the unit in the IDE.
+</div></div>
+<script>
+const DATA = /*DATA*/null;
+if (/*DARK*/false) document.body.classList.add('dark');
+const post = m => window.chrome && chrome.webview ? chrome.webview.postMessage(JSON.stringify(m)) : console.log(m);
+
+const units = DATA ? DATA.units : [];
+const byName = new Map(units.map((u, i) => [u.name.toLowerCase(), i]));
+const nodes = units.map((u, i) => {
+  const a = (i / Math.max(1, units.length)) * Math.PI * 2, r = 120 + 8 * Math.sqrt(units.length) * Math.random();
+  return { u, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0, r: 5 + Math.sqrt(Math.max(u.lines, 1)) / 2.2, fixed: false };
+});
+const edges = [];
+units.forEach((u, i) => {
+  for (const n of u.intf) { const j = byName.get(n.toLowerCase()); if (j !== undefined) edges.push({ s: i, t: j, impl: false }); }
+  for (const n of u.impl) { const j = byName.get(n.toLowerCase()); if (j !== undefined) edges.push({ s: i, t: j, impl: true }); }
+});
+const totalLines = units.reduce((a, u) => a + u.lines, 0);
+document.getElementById('stats').textContent =
+  `${units.length} units, ${totalLines.toLocaleString()} lines, ${DATA ? DATA.cycles.length : 0} cycle(s)`;
+
+function color(u) {
+  if (u.cycle >= 0) return '#d13438';
+  if (u.kind !== 'unit') return '#e8912d';
+  if (u.form === 'form' || u.form === 'frame') return '#3b82f6';
+  if (u.form === 'dataModule') return '#22a06b';
+  return '#8b8b8b';
+}
+
+const canvas = document.getElementById('map'), ctx = canvas.getContext('2d');
+let view = { x: 0, y: 0, k: 1 }, selected = -1, hover = -1, filter = '';
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+let userMoved = false;
+// Shows the whole graph; again on resize until the user pans or zooms.
+function fit() {
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!nodes.length || W < 50 || H < 50) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const a of nodes) { x0 = Math.min(x0, a.x - a.r); y0 = Math.min(y0, a.y - a.r); x1 = Math.max(x1, a.x + a.r); y1 = Math.max(y1, a.y + a.r + 16); }
+  view.k = Math.max(0.15, Math.min(2, Math.min((W - 60) / (x1 - x0 || 1), (H - 60) / (y1 - y0 || 1))));
+  view.x = W / 2 - (x0 + x1) / 2 * view.k; view.y = H / 2 - (y0 + y1) / 2 * view.k;
+}
+window.addEventListener('resize', () => { resize(); if (!userMoved) fit(); }); resize();
+
+// Force layout: repulsion, springs along edges, gentle pull to the center.
+let heat = 1;
+function step() {
+  const n = nodes.length;
+  for (let i = 0; i < n; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy + 0.01;
+      const f = 1800 / d2, d = Math.sqrt(d2);
+      dx /= d; dy /= d;
+      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+    }
+  }
+  for (const e of edges) {
+    const a = nodes[e.s], b = nodes[e.t];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+    const f = (d - 90 - a.r - b.r) * 0.012;
+    a.vx += dx / d * f; a.vy += dy / d * f; b.vx -= dx / d * f; b.vy -= dy / d * f;
+  }
+  for (const a of nodes) {
+    a.vx -= a.x * 0.002; a.vy -= a.y * 0.002;
+    if (!a.fixed) { a.x += Math.max(-20, Math.min(20, a.vx * heat)); a.y += Math.max(-20, Math.min(20, a.vy * heat)); }
+    a.vx *= 0.5; a.vy *= 0.5;
+  }
+  heat = Math.max(0.02, heat * 0.995);
+}
+
+function related(i) {
+  if (i < 0) return null;
+  const s = new Set([i]);
+  for (const e of edges) { if (e.s === i) s.add(e.t); if (e.t === i) s.add(e.s); }
+  return s;
+}
+
+function draw() {
+  const W = canvas.clientWidth, H = canvas.clientHeight, dark = document.body.classList.contains('dark');
+  ctx.clearRect(0, 0, W, H);
+  ctx.save(); ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+  const focus = related(selected >= 0 ? selected : hover);
+  const match = i => !filter || units[i].name.toLowerCase().includes(filter);
+  for (const e of edges) {
+    const a = nodes[e.s], b = nodes[e.t];
+    const on = focus ? focus.has(e.s) && focus.has(e.t) && (e.s === (selected >= 0 ? selected : hover) || e.t === (selected >= 0 ? selected : hover)) : true;
+    const cyc = units[e.s].cycle >= 0 && units[e.s].cycle === units[e.t].cycle;
+    ctx.strokeStyle = cyc ? 'rgba(209,52,56,' + (on ? 0.9 : 0.15) + ')' : (dark ? 'rgba(200,200,200,' : 'rgba(60,60,60,') + (on ? (focus ? 0.8 : 0.25) : 0.05) + ')';
+    ctx.lineWidth = (on && focus ? 1.6 : 1) / view.k;
+    ctx.setLineDash(e.impl ? [4 / view.k, 3 / view.k] : []);
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const x2 = b.x - dx / d * b.r, y2 = b.y - dy / d * b.r;
+    ctx.beginPath(); ctx.moveTo(a.x + dx / d * a.r, a.y + dy / d * a.r); ctx.lineTo(x2, y2); ctx.stroke();
+    if (on && (focus || view.k > 0.8)) {
+      const s = 6 / view.k, ang = Math.atan2(dy, dx);
+      ctx.setLineDash([]); ctx.beginPath();
+      ctx.moveTo(x2, y2); ctx.lineTo(x2 - s * Math.cos(ang - 0.4), y2 - s * Math.sin(ang - 0.4));
+      ctx.moveTo(x2, y2); ctx.lineTo(x2 - s * Math.cos(ang + 0.4), y2 - s * Math.sin(ang + 0.4)); ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  nodes.forEach((a, i) => {
+    const dim = (focus && !focus.has(i)) || !match(i);
+    ctx.globalAlpha = dim ? 0.18 : 1;
+    ctx.fillStyle = color(a.u);
+    ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2); ctx.fill();
+    if (i === selected) { ctx.lineWidth = 3 / view.k; ctx.strokeStyle = dark ? '#fff' : '#000'; ctx.stroke(); }
+    if (!dim && (view.k > 0.55 || a.r > 14 || i === selected || i === hover || filter)) {
+      ctx.fillStyle = dark ? '#e0e0e0' : '#202020';
+      ctx.font = `${12 / view.k}px Segoe UI`; ctx.textAlign = 'center';
+      ctx.fillText(a.u.name, a.x, a.y + a.r + 13 / view.k);
+    }
+  });
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+function loop() { if (heat > 0.02) { step(); step(); if (!userMoved) fit(); } draw(); requestAnimationFrame(loop); }
+for (let i = 0; i < 250; i++) step();
+fit();
+loop();
+
+function toWorld(e) { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k }; }
+function hit(p) { for (let i = nodes.length - 1; i >= 0; i--) { const a = nodes[i]; if ((a.x - p.x) ** 2 + (a.y - p.y) ** 2 <= (a.r + 3) ** 2) return i; } return -1; }
+let drag = null;
+canvas.addEventListener('mousedown', e => {
+  const p = toWorld(e), i = hit(p);
+  drag = i >= 0 ? { node: i, moved: false } : { pan: true, x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false };
+  if (i >= 0) nodes[i].fixed = true;
+  canvas.style.cursor = 'grabbing';
+});
+window.addEventListener('mousemove', e => {
+  if (!drag) { const i = hit(toWorld(e)); if (i !== hover) { hover = i; canvas.style.cursor = i >= 0 ? 'pointer' : 'grab'; } return; }
+  drag.moved = true;
+  userMoved = true;
+  if (drag.pan) { view.x = drag.vx + e.clientX - drag.x; view.y = drag.vy + e.clientY - drag.y; }
+  else { const p = toWorld(e); nodes[drag.node].x = p.x; nodes[drag.node].y = p.y; heat = Math.max(heat, 0.2); }
+});
+window.addEventListener('mouseup', e => {
+  if (drag && !drag.moved) { const i = drag.pan ? -1 : drag.node; select(i); }
+  drag = null; canvas.style.cursor = hover >= 0 ? 'pointer' : 'grab';
+});
+canvas.addEventListener('dblclick', e => { const i = hit(toWorld(e)); if (i >= 0) post({ open: units[i].file }); });
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  userMoved = true;
+  const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k = Math.max(0.15, Math.min(4, view.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  view.x = mx - (mx - view.x) * k / view.k; view.y = my - (my - view.y) * k / view.k; view.k = k;
+}, { passive: false });
+document.getElementById('search').addEventListener('input', e => {
+  filter = e.target.value.trim().toLowerCase();
+  const hits = units.map((u, i) => i).filter(i => units[i].name.toLowerCase().includes(filter));
+  if (filter && hits.length === 1) select(hits[0], true);
+});
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function links(list) { return list.length ? list.map(n => `<a data-unit="${esc(n)}">${esc(n)}</a>`).join('') : '<span class="meta">none</span>'; }
+function select(i, center) {
+  selected = i;
+  const side = document.getElementById('side');
+  if (i < 0) { side.innerHTML = document.getElementById('help') ? side.innerHTML : side.innerHTML; return; }
+  const u = units[i];
+  if (center) { view.x = canvas.clientWidth / 2 - nodes[i].x * view.k; view.y = canvas.clientHeight / 2 - nodes[i].y * view.k; }
+  side.innerHTML = `<h2>${esc(u.name)}</h2>
+    <div class="meta">${esc(u.kind)}${u.form ? ' with a ' + esc(u.form) : ''} &middot; ${u.lines.toLocaleString()} lines &middot;
+      ${u.types} types &middot; ${u.routines} routines</div>
+    <button class="primary" id="ask">Ask Claude</button><button id="open">Open</button>
+    ${u.cycle >= 0 ? `<h3>In a cycle</h3><div class="warn">${DATA.cycles[u.cycle].map(esc).join(' &harr; ')}</div>` : ''}
+    <h3>Uses (interface)</h3>${links(u.intf)}
+    <h3>Uses (implementation)</h3>${links(u.impl)}
+    <h3>Used by</h3>${links(u.usedBy)}
+    <h3>Library and RTL units</h3><span class="meta">${u.external}</span>`;
+  document.getElementById('open').onclick = () => post({ open: u.file });
+  document.getElementById('ask').onclick = () => post({ ask: u.name, file: u.file });
+  side.querySelectorAll('a[data-unit]').forEach(a => a.onclick = () => select(byName.get(a.dataset.unit.toLowerCase()), true));
+}
+</script>
+</body>
+</html>
