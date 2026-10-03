@@ -30,6 +30,8 @@ procedure StartDebugging(const Project: IOTAProject; const Params: string; WaitS
 function DebugStopPrompt: string;
 { Drops a pending debugControl wait without answering it. }
 procedure CancelDebugWaits;
+{ True while the program is stopped only because a logpoint is recording (it runs on by itself). }
+function StoppedAtLogpoint: Boolean;
 { Removes the logpoints (their breakpoints would stop the program without us) and timers. }
 procedure ShutdownDebugTools;
 
@@ -1014,6 +1016,14 @@ end;
 function IsLogpointStop(const P: IOTAProcess): Boolean;
 begin
   Result := (Logpoints <> nil) and ((Logpoints.FStackOf <> nil) or (Logpoints.AtStop(P) <> nil));
+end;
+
+function StoppedAtLogpoint: Boolean;
+var
+  P: IOTAProcess;
+begin
+  P := CurrentProcess;
+  Result := (P <> nil) and IsStopped(P) and IsLogpointStop(P);
 end;
 
 function LogpointIdOf(const B: IOTABreakpoint): Integer;

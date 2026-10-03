@@ -21,6 +21,8 @@ procedure Log(const Msg: string);
   pasting) fail or hang when called from inside CheckSynchronize, which is not re-entrant.
   Callable from any thread. }
 procedure RunInMainLoop(const Proc: TProc);
+{ The same, after Ms milliseconds (a timer of the same window). }
+procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
 { Runs what RunInMainLoop has queued so far (main thread; used when shutting down). }
 procedure FlushMainLoop;
 
@@ -47,6 +49,8 @@ type
     FWnd: HWND;
     FLock: TCriticalSection;
     FQueue: TQueue<System.SysUtils.TProc>;
+    FTimers: TDictionary<UIntPtr, System.SysUtils.TProc>;
+    FNextTimer: UIntPtr;
     procedure WndProc(var Msg: TMessage);
   public
     constructor Create;
@@ -62,12 +66,15 @@ begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FQueue := TQueue<System.SysUtils.TProc>.Create;
+  FTimers := TDictionary<UIntPtr, System.SysUtils.TProc>.Create;
+  FNextTimer := 1;
   FWnd := AllocateHWnd(WndProc);
 end;
 
 destructor TMainLoopDispatcher.Destroy;
 begin
   DeallocateHWnd(FWnd);
+  FTimers.Free;
   FQueue.Free;
   FLock.Free;
   inherited;
@@ -88,6 +95,21 @@ procedure TMainLoopDispatcher.WndProc(var Msg: TMessage);
 var
   Proc: System.SysUtils.TProc;
 begin
+  if Msg.Msg = WM_TIMER then
+  begin
+    KillTimer(FWnd, Msg.WParam);
+    if FTimers.TryGetValue(Msg.WParam, Proc) then
+    begin
+      FTimers.Remove(Msg.WParam);
+      try
+        Proc();
+      except
+        on E: Exception do
+          Log('Main loop task failed: ' + E.ClassName + ': ' + E.Message);
+      end;
+    end;
+    Exit;
+  end;
   if Msg.Msg <> WM_RUN_QUEUED then
   begin
     Msg.Result := DefWindowProc(FWnd, Msg.Msg, Msg.WParam, Msg.LParam);
@@ -113,6 +135,17 @@ end;
 procedure RunInMainLoop(const Proc: TProc);
 begin
   Dispatcher.Post(Proc);
+end;
+
+procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
+var
+  Id: UIntPtr;
+begin
+  // Main thread only (the timers belong to the dispatcher's window).
+  Id := Dispatcher.FNextTimer;
+  Inc(Dispatcher.FNextTimer);
+  Dispatcher.FTimers.Add(Id, Proc);
+  SetTimer(Dispatcher.FWnd, Id, Ms, nil);
 end;
 
 procedure FlushMainLoop;

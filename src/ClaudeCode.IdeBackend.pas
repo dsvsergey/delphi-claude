@@ -43,7 +43,7 @@ type
     procedure ToolBuildProject(Args: TJSONObject; const Done: TToolDone);
     procedure ToolRunTests(Args: TJSONObject; const Done: TToolDone);
     procedure StartProgram(Args: TJSONObject; const Done: TToolDone);
-    procedure ToolAppTool(const Name: string; Args: TJSONObject; const Done: TToolDone);
+    procedure ToolAppTool(const Name: string; Args: TJSONObject; const Done: TToolDone; Attempt: Integer = 0);
     procedure ToolDatabase(const Name: string; Args: TJSONObject; const Done: TToolDone);
     procedure ToolAnalyzeModernization(Args: TJSONObject; const Done: TToolDone);
     function ToolGetProjectInfo(Args: TJSONObject): TToolResult;
@@ -1632,7 +1632,7 @@ end;
 
 { The running program }
 
-procedure TDelphiIdeBackend.ToolAppTool(const Name: string; Args: TJSONObject; const Done: TToolDone);
+procedure TDelphiIdeBackend.ToolAppTool(const Name: string; Args: TJSONObject; const Done: TToolDone; Attempt: Integer);
 var
   Pid: Cardinal;
   P: IOTAProcess;
@@ -1640,6 +1640,7 @@ var
   Depth, MaxNodes: Integer;
   Act: TAppAction;
   Res, Err: string;
+  ArgsCopy: TJSONObject;
   Pictures: TArray<TWindowPixels>;
   Windows: TArray<TAppWindow>;
 begin
@@ -1651,6 +1652,21 @@ begin
   begin
     Done(TToolResult.Error('No program is being debugged. Start it with debugControl "start", or pass ' +
       '"processId" of another running program.'));
+    Exit;
+  end;
+  // A logpoint stops the program only for a moment: try again when it runs on.
+  if (P <> nil) and (P.OSProcessId = Pid) and StoppedAtLogpoint and (Attempt < 50) then
+  begin
+    ArgsCopy := Args.Clone as TJSONObject;
+    RunInMainLoopAfter(100,
+      procedure
+      begin
+        try
+          ToolAppTool(Name, ArgsCopy, Done, Attempt + 1);
+        finally
+          ArgsCopy.Free;
+        end;
+      end);
     Exit;
   end;
   // A program stopped in the debugger does not answer: UI Automation and painting would wait.

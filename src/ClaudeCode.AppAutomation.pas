@@ -482,16 +482,13 @@ var
 
   procedure Key(Code: Word);
   begin
+    // The program's message loop translates the key down into WM_CHAR (Enter, Tab, Esc,
+    // Backspace) itself; posting the character too would type it twice.
     PostMessage(Target, WM_KEYDOWN, Code, 1);
-    if Code = VK_RETURN then
-      PostMessage(Target, WM_CHAR, 13, 1)
-    else if Code = VK_TAB then
-      PostMessage(Target, WM_CHAR, 9, 1)
-    else if Code = VK_ESCAPE then
-      PostMessage(Target, WM_CHAR, 27, 1)
-    else if Code = VK_BACK then
-      PostMessage(Target, WM_CHAR, 8, 1);
     PostMessage(Target, WM_KEYUP, Code, LPARAM($C0000001));
+    // That WM_CHAR is queued behind what we post next: let the program take the key first.
+    if (Code in [VK_RETURN, VK_TAB, VK_ESCAPE, VK_BACK]) and (J < Length(Keys)) then
+      Sleep(100);
   end;
 
 begin
