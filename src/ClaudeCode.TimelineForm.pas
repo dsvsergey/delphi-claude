@@ -214,11 +214,12 @@ begin
   FTurns.RowSelect := True;
   FTurns.HideSelection := False;
   FTurns.OnSelectItem := TurnsSelect;
-  Col(FTurns, '#', 40);
-  Col(FTurns, 'Time', 80);
+  // The request first: the caption is what screen readers and UI Automation read for a row.
   Col(FTurns, 'Request', 560);
+  Col(FTurns, 'Time', 80);
   Col(FTurns, 'Files', 60);
   Col(FTurns, 'Lines', 100);
+  Col(FTurns, '#', 40);
 end;
 
 procedure TTimelineForm.SetHooksInfo(HooksOn: Boolean);
@@ -264,14 +265,13 @@ begin
       T := FTimeline.Turn(I);
       Item := FTurns.Items.Add;
       Item.Data := Pointer(I);
-      Item.Caption := IntToStr(T.Id);
       Item.SubItems.Add(FormatDateTime('hh:nn:ss', T.Started));
       Prompt := StringReplace(StringReplace(T.Prompt, #13, ' ', [rfReplaceAll]), #10, ' ', [rfReplaceAll]);
       if Prompt = '' then
         Prompt := '(request not recorded)';
       if T.Running then
         Prompt := '[working] ' + Prompt;
-      Item.SubItems.Add(Prompt);
+      Item.Caption := Prompt;
       Item.SubItems.Add(IntToStr(T.Files.Count));
       Added := 0;
       Removed := 0;
@@ -287,6 +287,7 @@ begin
         Inc(Removed, R);
       end;
       Item.SubItems.Add(Format('+%d -%d', [Added, Removed]));
+      Item.SubItems.Add(IntToStr(T.Id));
       if I = Keep then
         Item.Selected := True;
     end;
