@@ -28,6 +28,10 @@ procedure StartDebugging(const Project: IOTAProject; const Params: string; WaitS
 
 { A request for Claude describing why the debugged process is stopped, or '' when it is not. }
 function DebugStopPrompt: string;
+{ True when the debugged process is stopped (breakpoint, exception, pause). }
+function DebugIsStopped: Boolean;
+{ A request for Claude to explain the value of Expr at the current stop; '' when not stopped. }
+function DebugValuePrompt(const Expr: string): string;
 { Drops a pending debugControl wait without answering it. }
 procedure CancelDebugWaits;
 { True while the program is stopped only because a logpoint is recording (it runs on by itself). }
@@ -1233,12 +1237,71 @@ end;
 
 { Explain Debugger Stop }
 
+{ The call stack for a request: frames with source; those without (RTL, system DLLs) are only counted. }
+function StackText(Stack: TJSONArray): string;
+var
+  I, Skipped: Integer;
+  Frame: TJSONObject;
+begin
+  Result := 'Call stack:' + #10;
+  Skipped := 0;
+  for I := 0 to Stack.Count - 1 do
+  begin
+    Frame := Stack.Items[I] as TJSONObject;
+    if JsonStr(Frame, 'file') = '' then
+    begin
+      Inc(Skipped);
+      Continue;
+    end;
+    Result := Result + Format('  %s (%s:%s)', [JsonStr(Frame, 'call'), ExtractFileName(JsonStr(Frame, 'file')),
+      JsonStr(Frame, 'line')]) + #10;
+  end;
+  if Skipped > 0 then
+    Result := Result + Format('  (%d frame(s) without source not shown)', [Skipped]) + #10;
+end;
+
+function DebugIsStopped: Boolean;
+begin
+  Result := IsStopped(CurrentProcess);
+end;
+
+function DebugValuePrompt(const Expr: string): string;
+var
+  State, Th: TJSONObject;
+  T: IOTAThread;
+  Value: string;
+  CanModify: Boolean;
+begin
+  Result := '';
+  if not IsStopped(CurrentProcess) then
+    Exit;
+  T := CurrentProcess.CurrentThread;
+  if (T = nil) or not EvaluateSync(T, Expr, False, Value, CanModify) then
+    Value := 'cannot be evaluated here: ' + Value;
+  State := DebugStateJson(10, 6);
+  try
+    Result := Format('While debugging %s, the value of %s is:', [ExtractFileName(JsonStr(State, 'exe')), Expr]) +
+      #10 + '```' + #10 + Value + #10 + '```' + #10;
+    if State.GetValue('currentThread') is TJSONObject then
+    begin
+      Th := TJSONObject(State.GetValue('currentThread'));
+      if JsonStr(Th, 'file') <> '' then
+        Result := Result + Format('The program is stopped at %s:%s', [JsonStr(Th, 'file'), JsonStr(Th, 'line')]) +
+          #10 + '```pascal' + #10 + JsonStr(Th, 'source') + '```' + #10;
+      if Th.GetValue('callStack') is TJSONArray then
+        Result := Result + StackText(TJSONArray(Th.GetValue('callStack')));
+    end;
+    Result := Result + 'Explain what this value means at this point and whether it is what the code expects. If ' +
+      'it is not, find where it comes from: evaluate related expressions with mcp__delphi__evaluateExpression, ' +
+      'read the callers in the stack, and explain the likely cause. Do not change code yet.';
+  finally
+    State.Free;
+  end;
+end;
+
 function DebugStopPrompt: string;
 var
-  State, Th, Ex, Frame: TJSONObject;
-  Stack: TJSONArray;
-  I: Integer;
-  Loc: string;
+  State, Th, Ex: TJSONObject;
 begin
   Result := '';
   if not IsStopped(CurrentProcess) then
@@ -1261,18 +1324,7 @@ begin
         Result := Result + Format('Current line: %s:%s', [JsonStr(Th, 'file'), JsonStr(Th, 'line')]) + #10 +
           '```pascal' + #10 + JsonStr(Th, 'source') + '```' + #10;
       if Th.GetValue('callStack') is TJSONArray then
-      begin
-        Stack := TJSONArray(Th.GetValue('callStack'));
-        Result := Result + 'Call stack:' + #10;
-        for I := 0 to Stack.Count - 1 do
-        begin
-          Frame := Stack.Items[I] as TJSONObject;
-          Loc := '';
-          if JsonStr(Frame, 'file') <> '' then
-            Loc := Format(' (%s:%s)', [ExtractFileName(JsonStr(Frame, 'file')), JsonStr(Frame, 'line')]);
-          Result := Result + '  ' + JsonStr(Frame, 'call') + Loc + #10;
-        end;
-      end;
+        Result := Result + StackText(TJSONArray(Th.GetValue('callStack')));
     end;
     Result := Result + 'Explain why it stopped here and what the likely cause is. You can inspect values with ' +
       'mcp__delphi__evaluateExpression and step with mcp__delphi__debugControl.';

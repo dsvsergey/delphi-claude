@@ -162,6 +162,10 @@ Menu **Tools → Claude Code**:
   *Ask Claude About This...* only puts the reference into the prompt. The request texts can be changed in
   `%USERPROFILE%\.claude\delphi-prompts.json`, e.g. `{"explain": "Поясни цей код: {ref}"}`
   (keys: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+  *Explain This Value (debugger)*, available while the debugged program is stopped, evaluates the selected
+  expression (or the identifier under the cursor, e.g. `Order.Customer`) and asks Claude what the value means at
+  this point, with the current line and the call stack; Claude evaluates related expressions to find where a wrong
+  value comes from.
 - **Project Manager → Add to Claude Context**: puts `@file` (or `@folder/` for a project) for the selected nodes into the prompt.
 - **Messages → Fix Build Errors with Claude**: the same as the Tools menu command (the Messages view does not expose
   the text of its lines, so the project is rebuilt to collect the errors).

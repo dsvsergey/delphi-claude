@@ -162,6 +162,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   *Ask Claude About This...* лише вставляє посилання в підказку. Тексти запитів можна змінити у
   `%USERPROFILE%\.claude\delphi-prompts.json`, наприклад `{"explain": "Поясни цей код: {ref}"}`
   (ключі: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+  *Explain This Value (debugger)*, доступний, поки налагоджувана програма зупинена, обчислює виділений вираз (або
+  ідентифікатор під курсором, наприклад `Order.Customer`) і питає Claude, що це значення означає в цьому місці,
+  разом із поточним рядком і стеком викликів; Claude обчислює пов'язані вирази, щоб знайти, звідки береться хибне
+  значення.
 - **Project Manager → Add to Claude Context**: вставляє в підказку `@файл` (або `@тека/` для проєкту) для виділених вузлів.
 - **Messages → Fix Build Errors with Claude**: те саме, що команда з меню Tools (вікно Messages не дає прочитати текст
   своїх рядків, тож проєкт перезбирається, щоб зібрати помилки).

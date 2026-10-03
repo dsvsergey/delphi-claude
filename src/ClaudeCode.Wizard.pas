@@ -84,6 +84,7 @@ type
     function FileRef(const Path: string; Line1, Line2: Integer): string;
     function PromptTemplate(const Command: string): string;
     procedure EditorCommand(const Command: string);
+    procedure ExplainValue;
     procedure AddToContext(const Files: TArray<string>);
   public
     constructor Create;
@@ -150,6 +151,7 @@ begin
       Result := FBackend.CurrentSelection(False).Valid;
     end);
   FContextMenus.OnEditorCommand := EditorCommand;
+  FContextMenus.CanExplainValue := DebugIsStopped;
   FContextMenus.OnAddToContext := AddToContext;
   FContextMenus.OnFixBuildErrors := BuildFixExecute;
 
@@ -955,6 +957,11 @@ var
   Sel: TSelectionInfo;
   Line1, Line2: Integer;
 begin
+  if Command = ecExplainValue then
+  begin
+    ExplainValue;
+    Exit;
+  end;
   Sel := FBackend.CurrentSelection(False);
   if not Sel.Valid then
     Exit;
@@ -965,6 +972,54 @@ begin
     Dec(Line2);
   SendToClaude(StringReplace(PromptTemplate(Command), '{ref}', FileRef(Sel.FilePath, Line1, Line2),
     [rfReplaceAll]), (Command <> ecAsk) and LoadSettings.SubmitRequests);
+end;
+
+{ The expression under the cursor: identifiers joined by dots (Order.Customer), or the selection. }
+function ExpressionAt(const Line: string; Index: Integer): string;
+var
+  A, B: Integer;
+begin
+  // Index is 0-based (UTF-16, as the selection reports it).
+  A := Index + 1;
+  B := Index;
+  while (A > 1) and CharInSet(Line[A - 1], ['A'..'Z', 'a'..'z', '0'..'9', '_', '.']) do
+    Dec(A);
+  while (B < Length(Line)) and CharInSet(Line[B + 1], ['A'..'Z', 'a'..'z', '0'..'9', '_', '.']) do
+    Inc(B);
+  Result := Copy(Line, A, B - A + 1).Trim(['.']);
+end;
+
+procedure TClaudeCodeWizard.ExplainValue;
+var
+  Sel: TSelectionInfo;
+  Lines: TArray<string>;
+  Expr, Prompt: string;
+begin
+  if not DebugIsStopped then
+  begin
+    ShowMessage('The debugged program is not stopped (no breakpoint, exception or pause).');
+    Exit;
+  end;
+  Sel := FBackend.CurrentSelection(True);
+  if not Sel.Valid then
+    Exit;
+  Expr := Trim(Sel.Text);
+  if (Expr = '') or Expr.Contains(#10) then
+  begin
+    Lines := ReadBufferText(EditorServices.TopBuffer).Split([#10]);
+    Expr := '';
+    if Sel.StartLine < Length(Lines) then
+      Expr := ExpressionAt(Lines[Sel.StartLine].TrimRight([#13]), Sel.StartChar);
+  end;
+  if Expr = '' then
+  begin
+    ShowMessage('Put the cursor on a variable (or select an expression) first.');
+    Exit;
+  end;
+  Prompt := DebugValuePrompt(Expr);
+  if (Prompt = '') or (SessionFrame = nil) then
+    Exit;
+  SendToClaude(Prompt, LoadSettings.SubmitRequests);
 end;
 
 procedure TClaudeCodeWizard.AddToContext(const Files: TArray<string>);
