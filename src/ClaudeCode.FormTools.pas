@@ -16,6 +16,7 @@ function ToolSetComponentProperties(Args: TJSONObject): TToolResult;
 function ToolCreateComponent(Args: TJSONObject): TToolResult;
 function ToolDeleteComponent(Args: TJSONObject): TToolResult;
 function ToolCaptureForm(Args: TJSONObject): TToolResult;
+procedure ToolPasteDfm(Args: TJSONObject; const Done: TToolDone);
 
 { True when the form designer is the active IDE view. }
 function DesignerIsActive: Boolean;
@@ -26,7 +27,7 @@ implementation
 
 uses
   Winapi.Windows, System.IOUtils, System.TypInfo, System.Generics.Collections,
-  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Imaging.pngimage,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Imaging.pngimage, Vcl.Clipbrd, Vcl.ExtCtrls,
   ClaudeCode.Utils, ClaudeCode.ComponentProps;
 
 const
@@ -558,6 +559,362 @@ begin
   Obj.AddPair('height', TJSONNumber.Create(Control.ClientHeight));
   Obj.AddPair('hint', 'Open the PNG with the Read tool to see the form (client area, as in the designer).');
   Result := TToolResult.Json(Obj);
+end;
+
+{ pasteDfm }
+
+type
+  TOneShot = class(TComponent)
+  public
+    Proc: TProc;
+    procedure Fire(Sender: TObject);
+  end;
+
+procedure TOneShot.Fire(Sender: TObject);
+var
+  P: TProc;
+begin
+  (Sender as TTimer).Enabled := False;
+  P := Proc;
+  Proc := nil;
+  // Free this owner (and its timer) after the event handler returns.
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      Free;
+    end);
+  if Assigned(P) then
+    P();
+end;
+
+
+type
+  { The clipboard's memory-based formats (text, CF_DIB images, files...), put back after we used it. }
+  TClipboardBackup = class
+  private
+    FFormats: TList<Cardinal>;
+    FData: TList<TBytes>;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Save;
+    procedure Restore;
+  end;
+
+constructor TClipboardBackup.Create;
+begin
+  inherited Create;
+  FFormats := TList<Cardinal>.Create;
+  FData := TList<TBytes>.Create;
+end;
+
+destructor TClipboardBackup.Destroy;
+begin
+  FData.Free;
+  FFormats.Free;
+  inherited;
+end;
+
+procedure TClipboardBackup.Save;
+var
+  Fmt: Cardinal;
+  H: THandle;
+  P: Pointer;
+  Size: NativeUInt;
+  B: TBytes;
+begin
+  if not OpenClipboard(0) then
+    Exit;
+  try
+    Fmt := EnumClipboardFormats(0);
+    while Fmt <> 0 do
+    begin
+      // GDI handles (CF_BITMAP, CF_ENHMETAFILE...) are not memory; Windows synthesizes them from CF_DIB etc.
+      if not (Fmt in [CF_BITMAP, CF_METAFILEPICT, CF_PALETTE, CF_ENHMETAFILE, CF_OWNERDISPLAY,
+         CF_DSPBITMAP, CF_DSPMETAFILEPICT, CF_DSPENHMETAFILE]) then
+      begin
+        H := GetClipboardData(Fmt);
+        if H <> 0 then
+        begin
+          Size := GlobalSize(H);
+          P := GlobalLock(H);
+          if P <> nil then
+          try
+            SetLength(B, Size);
+            if Size > 0 then
+              Move(P^, B[0], Size);
+            FFormats.Add(Fmt);
+            FData.Add(B);
+          finally
+            GlobalUnlock(H);
+          end;
+        end;
+      end;
+      Fmt := EnumClipboardFormats(Fmt);
+    end;
+  finally
+    CloseClipboard;
+  end;
+end;
+
+procedure TClipboardBackup.Restore;
+var
+  I: Integer;
+  H: HGLOBAL;
+  P: Pointer;
+begin
+  if not OpenClipboard(0) then
+    Exit;
+  try
+    EmptyClipboard;
+    for I := 0 to FFormats.Count - 1 do
+    begin
+      H := GlobalAlloc(GMEM_MOVEABLE, NativeUInt(Length(FData[I])) + 1);
+      if H = 0 then
+        Continue;
+      P := GlobalLock(H);
+      if Length(FData[I]) > 0 then
+        Move(FData[I][0], P^, Length(FData[I]));
+      GlobalUnlock(H);
+      if SetClipboardData(FFormats[I], H) = 0 then
+        GlobalFree(H);
+    end;
+  finally
+    CloseClipboard;
+  end;
+end;
+
+{ Syntax check of DFM text with one or more top-level objects: wrapped in a dummy root and
+  converted to binary, which reports the line of the first error. }
+function CheckDfmSyntax(const Dfm: string; out Err: string): Boolean;
+var
+  Src: TStringStream;
+  Dst: TMemoryStream;
+begin
+  Err := '';
+  Src := TStringStream.Create('object ClaudeCheckRoot: TComponent'#13#10 + Dfm + #13#10'end'#13#10, TEncoding.UTF8);
+  Dst := TMemoryStream.Create;
+  try
+    try
+      ObjectTextToBinary(Src, Dst);
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        // Line numbers count the wrapper line.
+        Err := E.Message + ' (line numbers include one added line at the top)';
+        Result := False;
+      end;
+    end;
+  finally
+    Dst.Free;
+    Src.Free;
+  end;
+end;
+
+function TopLevelObjectCount(const Dfm: string): Integer;
+var
+  L: TStringList;
+  S: string;
+  Depth: Integer;
+  T: string;
+begin
+  Result := 0;
+  Depth := 0;
+  L := TStringList.Create;
+  try
+    L.Text := Dfm;
+    for S in L do
+    begin
+      T := LowerCase(Trim(S));
+      if T.StartsWith('object ') or T.StartsWith('inherited ') or T.StartsWith('inline ') then
+      begin
+        if Depth = 0 then
+          Inc(Result);
+        Inc(Depth);
+      end
+      else if (T = 'end') and (Depth > 0) then
+        Dec(Depth);
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+{ Runs Proc once after Ms milliseconds, from the main message loop. }
+procedure RunLater(Ms: Cardinal; const Proc: TProc);
+var
+  Shot: TOneShot;
+  Timer: TTimer;
+begin
+  Shot := TOneShot.Create(nil);
+  Shot.Proc := Proc;
+  Timer := TTimer.Create(Shot);
+  Timer.Interval := Ms;
+  Timer.OnTimer := Shot.Fire;
+  Timer.Enabled := True;
+end;
+
+procedure PasteNow(const FormSpec, ParentArg, Dfm: string; TopLevel, Attempt: Integer; const Done: TToolDone);
+var
+  Ctx: TFormContext;
+  Err, AllDfm, Blocks, Step: string;
+  ParentComp, C: TComponent;
+  Before: TDictionary<TComponent, Boolean>;
+  Created: TJSONArray;
+  Backup: TClipboardBackup;
+  EditHandler: IEditHandler;
+  I: Integer;
+  Obj: TJSONObject;
+begin
+  // The form may have been closed meanwhile: look it up again.
+  if not FindForm(FormSpec, Ctx, Err) or (Ctx.Designer = nil) then
+  begin
+    Done(Fail('The form is no longer open in the designer: ' + Err));
+    Exit;
+  end;
+  ParentComp := Ctx.Find(ParentArg);
+  if ParentComp = nil then
+  begin
+    Done(Fail('No parent component named ' + ParentArg + ' on ' + Ctx.Root.Name));
+    Exit;
+  end;
+  Before := TDictionary<TComponent, Boolean>.Create;
+  Backup := TClipboardBackup.Create;
+  try
+    for I := 0 to Ctx.Root.ComponentCount - 1 do
+      Before.Add(Ctx.Root.Components[I], True);
+    Step := 'select';
+    try
+      // Showing an already loaded form makes its designer the active one (what Edit > Paste works on).
+      Ctx.Module.Show;
+      Ctx.Editor.Show;
+      Ctx.Designer.SelectComponent(ParentComp);
+      Backup.Save;
+      try
+        Step := 'clipboard';
+        Clipboard.AsText := Dfm;
+        Step := 'canPaste';
+        if not Ctx.Designer.CanPaste then
+        begin
+          Done(Fail('The designer cannot paste into ' + ParentComp.Name + ' (not a container?)'));
+          Exit;
+        end;
+        Step := 'paste';
+        // The path of Edit > Paste in the IDE.
+        if Supports(Ctx.Designer, IEditHandler, EditHandler) then
+          EditHandler.EditAction(eaPaste)
+        else
+          Ctx.Designer.PasteSelection;
+      finally
+        Backup.Restore;
+      end;
+    except
+      on E: Exception do
+      begin
+        // The first paste into a freshly opened designer fails inside designide; the IDE is ready
+        // after it has been back in its message loop once, so try again from there.
+        if (Step = 'paste') and (Attempt < 4) and (Ctx.Root.ComponentCount = Before.Count) then
+        begin
+          Log(Format('pasteDfm: attempt %d failed (%s), retrying', [Attempt, E.Message]));
+          RunLater(400,
+            procedure
+            begin
+              PasteNow(FormSpec, ParentArg, Dfm, TopLevel, Attempt + 1, Done);
+            end);
+          Exit;
+        end;
+        Done(Fail(Format('Pasting failed (%s): %s: %s', [Step, E.ClassName, E.Message])));
+        Exit;
+      end;
+    end;
+
+    Created := TJSONArray.Create;
+    Blocks := '';
+    AllDfm := Ctx.Dfm;
+    for I := 0 to Ctx.Root.ComponentCount - 1 do
+    begin
+      C := Ctx.Root.Components[I];
+      if Before.ContainsKey(C) then
+        Continue;
+      Created.Add(ComponentJson(C));
+      // DFM of the pasted top-level components (their children are inside).
+      if not (C is TControl) or (TControl(C).Parent = nil) or Before.ContainsKey(TControl(C).Parent) or
+         (TControl(C).Parent = Ctx.Root) then
+        Blocks := Blocks + ExtractDfmObject(AllDfm, C.Name);
+    end;
+    if Created.Count = 0 then
+    begin
+      Created.Free;
+      Done(Fail('The designer did not create any component. Check that the classes are registered in the IDE ' +
+        '(their design-time packages installed) and fit this parent.'));
+      Exit;
+    end;
+    Ctx.Modified;
+    Obj := TJSONObject.Create;
+    Obj.AddPair('form', Ctx.Root.Name);
+    Obj.AddPair('parent', ParentComp.Name);
+    Obj.AddPair('created', Created);
+    Obj.AddPair('topLevelObjectsInDfm', TJSONNumber.Create(TopLevel));
+    Obj.AddPair('dfm', Blocks);
+    Obj.AddPair('hint', 'Names that already existed were changed by the designer, and event handlers that do ' +
+      'not exist in the unit are dropped (set them with setComponentProperties); see "created" and "dfm". ' +
+      'Check the layout with captureForm. The form is not saved.');
+    Done(TToolResult.Json(Obj));
+  finally
+    Backup.Free;
+    Before.Free;
+  end;
+end;
+
+procedure ToolPasteDfm(Args: TJSONObject; const Done: TToolDone);
+var
+  Ctx: TFormContext;
+  Err, Dfm, ParentArg, FormSpec: string;
+  TopLevel: Integer;
+begin
+  FormSpec := JsonStr(Args, 'form');
+  if not FindForm(FormSpec, Ctx, Err) then
+  begin
+    Done(Fail(Err));
+    Exit;
+  end;
+  if Ctx.Designer = nil then
+  begin
+    Done(Fail('The form has no designer; open it in the IDE first'));
+    Exit;
+  end;
+  Dfm := Trim(JsonStr(Args, 'dfm'));
+  if Dfm = '' then
+  begin
+    Done(Fail('"dfm" is required: one or more "object Name: TClass ... end" blocks'));
+    Exit;
+  end;
+  if not CheckDfmSyntax(Dfm, Err) then
+  begin
+    Done(Fail('The DFM text is not valid: ' + Err));
+    Exit;
+  end;
+  TopLevel := TopLevelObjectCount(Dfm);
+  ParentArg := JsonStr(Args, 'parent');
+  if Ctx.Find(ParentArg) = nil then
+  begin
+    Done(Fail('No parent component named ' + ParentArg + ' on ' + Ctx.Root.Name));
+    Exit;
+  end;
+  // The designer pastes into the active form. It becomes the active one only after the IDE has
+  // processed its messages and idle updates, so the paste runs a moment later (pasting right
+  // after opening a form fails inside the designer).
+  FormSpec := Ctx.Root.Name;
+  if Ctx.FileName <> '' then
+    FormSpec := Ctx.FileName;
+  Ctx.Module.Show;
+  Ctx.Editor.Show;
+  RunLater(250,
+    procedure
+    begin
+      PasteNow(FormSpec, ParentArg, Dfm, TopLevel, 1, Done);
+    end);
 end;
 
 { Designer selection for "Send Selection to Claude" }

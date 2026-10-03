@@ -209,7 +209,17 @@ begin
       for S in Tests do
         Line(Format('- DUnitX/DUnit test project: `%s` (build it like the project above and run the exe).',
           [Rel(S)]));
+      Line('- Inside the IDE session `mcp__delphi__runTests` builds and runs the tests and returns each failure ' +
+        'with the file and line of the test.');
     end;
+
+    Line;
+    Line('### Navigating the code');
+    Line;
+    Line('- `mcp__delphi__getUnitOutline` shows a unit''s structure with line ranges (cheaper than reading it); ' +
+      '`findSymbol` and `findReferences` find declarations and uses without matches in comments and strings; ' +
+      '`renameSymbol` renames across units and forms (dry run first). `getUnitDependencies` shows how units ' +
+      'depend on each other.');
 
     Line;
     Line('### Source files');
@@ -232,14 +242,20 @@ begin
       Line(Format('  - ... %d more', [Forms - MAX_LISTED_FORMS]));
     if Forms > 0 then
       Line('- While a form is open in the IDE, change it with `mcp__delphi__setComponentProperties`, ' +
-        '`createComponent` and `deleteComponent` (read it with `getFormComponents`) instead of editing ' +
-        'its .dfm/.fmx file: the designer keeps the file and the class declaration in sync.');
+        '`createComponent`, `pasteDfm` (whole blocks of DFM text) and `deleteComponent` (read it with ' +
+        '`getFormComponents`, look at it with `captureForm`) instead of editing its .dfm/.fmx file: the ' +
+        'designer keeps the file and the class declaration in sync.');
 
     Line;
     Line('### Debugging');
     Line;
     Line('- When the user is debugging in the IDE, `mcp__delphi__getDebugState` shows where the program ' +
-      'stopped (call stack, source, exception); `evaluateExpression` reads values; `debugControl` steps.');
+      'stopped (call stack, source, exception); `evaluateExpression` reads values; `debugControl` steps ' +
+      '(and "start" runs the program under the debugger).');
+    Line('- `setLogpoint`/`getLogpointHits` record values on a line without stopping; `captureApp`, ' +
+      '`getAppUI` and `appAction` look at and operate the running program, to reproduce a bug end to end.');
+    Line('- `listConnections`, `getDatabaseSchema` and `runQuery` (read-only) show the database behind the ' +
+      'project''s FireDAC connections.');
     Line(SECTION_END);
     Result := SB.ToString;
   finally

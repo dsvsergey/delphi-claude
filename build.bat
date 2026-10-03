@@ -16,6 +16,7 @@ pushd src\terminal
 "%BDS%\bin\brcc32.exe" -foterminal.res terminal.rc || exit /b 1
 "%BDS%\bin\brcc32.exe" -foloader32.res loader32.rc || exit /b 1
 "%BDS%\bin\brcc32.exe" -foloader64.res loader64.rc || exit /b 1
+"%BDS%\bin\brcc32.exe" -fopages.res pages.rc || exit /b 1
 popd
 
 echo === Win32 (bds.exe in bin) ===

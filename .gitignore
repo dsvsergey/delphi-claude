@@ -8,3 +8,7 @@ __history/
 src/terminal/*.res
 tests/out*/
 tests/buildsample/out/
+tests/e2e/out/
+tests/e2e/*.dsk
+tests/e2e/*.res
+tests/e2e/*.stat

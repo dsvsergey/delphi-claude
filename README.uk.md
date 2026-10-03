@@ -54,10 +54,26 @@ Claude Code використовує IDE-з'єднання сам і з ньог
 | `getDebugState` | процес під налагодженням: стан, поточний потік зі стеком викликів і кодом навколо поточного рядка, виняток (якщо зупинка на ньому), усі потоки |
 | `evaluateExpression` | обчислює вираз Delphi у зупиненому процесі (як Evaluate/Modify); побічні ефекти — лише якщо дозволено |
 | `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | точки зупину в коді з умовою і лічильником проходів |
-| `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (чекає наступної зупинки й повертає новий стан), `run`, `terminate` |
+| `debugControl` | `start` (запуск із налагодженням, як F9), `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (чекає наступної зупинки й повертає новий стан), `run`, `terminate` |
+| `setLogpoint` / `getLogpointHits` / `removeLogpoint` | logpoints: рядок записує значення Delphi-виразів (і за бажанням стек викликів) щоразу, коли виконується, а програма працює далі; спрацювання читаються таблицею |
 | `getFileHistory` | локальна історія файлу в IDE (`__history\ім'я.~N~`): список версій або текст однієї |
+| `runTests` | збирає DUnitX-проєкт (знаходить його в групі) і запускає: кожен упалий тест із повідомленням і файлом/рядком тестового методу; також на вкладці **Claude Tests** вікна Messages |
+| `pasteDfm` | створює компоненти з DFM-тексту так само, як Ctrl+V у дизайнері: вкладені контроли, колекції, події; повертає справжні імена |
+| `getUnitOutline` | структура юніта з діапазонами рядків: uses, типи й члени, процедури та тіла методів |
+| `findSymbol` / `findReferences` | оголошення й використання імені в кодах і текстових формах проєкту, без коментарів і рядків |
+| `renameSymbol` | перейменування в юнітах і формах: dry run показує входження з id, потім змінюються саме вибрані (відкриті файли — в редакторі з Undo; закриті зберігають кодування) |
+| `getUnitDependencies` / `showProjectMap` | як юніти використовують один одного (найбільші, найуживаніші, цикли) / інтерактивна карта для користувача |
+| `captureApp` / `getAppUI` / `appAction` | запущена програма: знімки її вікон, дерево UI Automation, клік/введення/зміна тексту як користувач (фокус лишається у вікні користувача) |
+| `listConnections` / `getDatabaseSchema` / `runQuery` | FireDAC-з'єднання форм проєкту, схема бази за ними, запити лише на читання (один SELECT у транзакції з відкатом) |
+| `analyzeModernization` | кандидати для `win64`, `unicode`, `bde` (BDE/dbExpress/ADO → FireDAC) або `warnings` (повна збірка, попередження за кодами) з порадами |
+| `getMemoryLeaks` | звіт FastMM4/FastMM5 про витоки, згрупований за класами, зі стеками виділення |
+| `showTimeline` | відкриває Claude Timeline для користувача |
 
 Зміни в дизайнері не зберігаються автоматично: перегляньте їх в IDE і збережіть або відкотіть форму.
+
+**Slash-команди.** Сервер `delphi` також віддає готові сценарії як MCP prompts; Claude Code показує їх як команди:
+`/mcp__delphi__make-tests-pass`, `/mcp__delphi__hunt-bug <що не так>`, `/mcp__delphi__screenshot-to-form <картинка>`,
+`/mcp__delphi__crud-form <таблиця>`, `/mcp__delphi__modernize <сценарій>`, `/mcp__delphi__explain-architecture`.
 `claude`, запущений поза IDE, може використати інструменти останньої запущеної IDE:
 `claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
@@ -115,11 +131,15 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Open in External Console**: те саме в окремому вікні консолі (якщо WebView2 недоступний).
 - **Build and Fix Errors with Claude**: зберігає змінені файли, збирає активний проєкт і, якщо збірка невдала, вставляє помилки в панель Claude як запит (Enter — надіслати).
 - **Explain Debugger Stop with Claude**: коли програма під налагодженням зупинена (breakpoint, виняток, пауза), вставляє в панель Claude виняток, поточний рядок із кодом і стек викликів як запит.
+- **Make Tests Pass with Claude**: запускає DUnitX-тести (`runTests`) і, якщо є упалі, вставляє їх у панель із проханням виправити код і запускати тести, доки всі не пройдуть.
+- **Project Map...**: граф залежностей юнітів у вікні: розміри, форми й дата-модулі, цикли; клік — що юніт використовує і хто використовує його, подвійний клік — відкрити, **Ask Claude** — пояснення.
+- **Modernize Project with Claude...**: вибір Win64, Unicode, бази даних (BDE/dbExpress/ADO → FireDAC), попереджень компілятора або витоків пам'яті; Claude аналізує проєкт і виправляє його порціями зі збіркою після кожної.
+- **Claude Timeline...**: ходи Claude з файлами, які змінив кожен (див. нижче).
 - **Create CLAUDE.md for Project...**: записує в `CLAUDE.md` проєкту розділ «Delphi project» (тип, framework, платформи, команда збірки, кодування юнітів, форми, DUnitX-проєкти, коли використовувати `mcp__delphi__*`). Генерується лише частина між `<!-- delphi:begin -->` і `<!-- delphi:end -->`; спершу ви переглядаєте її у вікні diff.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.
 - **Restart Server**: перезапуск із новим портом і токеном (запущеним сесіям потрібно виконати `/ide`).
-- **Settings…**: команди для панелі й зовнішньої консолі, модель (`--model`), режим дозволів (`--permission-mode`), інші аргументи, чи давати Claude Delphi-інструменти, чи застосовувати зміни файлів від Claude до відкритих редакторів і чи надсилати запити з контекстного меню одразу.
+- **Settings…**: команди для панелі й зовнішньої консолі, модель (`--model`), режим дозволів (`--permission-mode`), інші аргументи, чи давати Claude Delphi-інструменти, чи застосовувати зміни файлів від Claude до відкритих редакторів, чи надсилати запити з контекстного меню одразу, чи показувати запропоновані зміни **прямо в редакторі коду** замість вікна diff і чи **записувати ходи Claude для таймлайну**.
 
   ![Вікно Settings](docs/images/settings.png)
 
@@ -146,6 +166,28 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 перехід між змінами; Accept записує лише взяті зміни (якщо не взято жодної — це відхилення).
 
 ![Вікно diff: запропонована зміна Unit1.pas, кожну зміну можна взяти або пропустити](docs/images/diff-window.png)
+
+### Перегляд змін прямо в редакторі
+
+З **Settings… → Show Claude's proposed changes in the code editor** пропозиція потрапляє одразу в редактор (однією
+правкою з Undo) замість вікна diff. Додані й змінені рядки мають зелене тло, місця видалення — червону позначку, а панель
+над редактором показує кількість змін, видалений текст поточної та кнопки **Previous / Next** (`Ctrl+Alt+PgUp/PgDn`),
+**Undo this change** (`Ctrl+Alt+Z`), **Accept all** (`Ctrl+Alt+Enter`) і **Reject all** (`Ctrl+Alt+Backspace`). Текст можна
+редагувати під час перегляду: підсвічування — це завжди різниця з оригіналом. Accept зберігає файл і відповідає Claude
+поточним текстом; Reject повертає оригінал байт у байт. Форми, файли проєкту, нові файли та вкладки з незбереженими змінами
+й далі відкриваються у вікні diff.
+
+### Claude Timeline
+
+З **Settings… → Record Claude's turns** сесії, запущені з IDE, отримують хуки Claude Code (`--settings`), які
+повідомляють IDE про кожен запит, кожен файл перед зміною й кінець кожного ходу (`POST /hook`, той самий токен).
+**Tools → Claude Code → Claude Timeline** показує ходи з файлами та зміненими рядками; **Show Diff** — що хід зробив із
+файлом, **Rewind to Before This Turn** повертає кожен файл, змінений у цьому ході чи пізніше, точно таким, яким він був
+(відкриті вкладки змінюються на місці, Ctrl+Z скасовує). Сама розмова з Claude не змінюється.
+IDE відповідає на хук лише після його обробки, тож копія файлу знімається до того, як Claude його запише (якщо IDE
+зайнята довше 5 секунд, Claude продовжує, не чекаючи). Файл налаштувань хуків
+(`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) видаляється під час закриття IDE; файли, що лишилися після
+аварійного завершення, прибираються під час наступного запуску.
 
 ### Файли, які Claude змінює на диску
 
@@ -186,6 +228,24 @@ src/ClaudeCode.WebViewHost.pas    легкий хост WebView2 (сторінк
 src/ClaudeCode.ConPty.pas         псевдоконсоль Windows + Job Object
 src/terminal/                     сторінка терміналу та .rc для ресурсів
 src/ClaudeCode.Wizard.pas      майстер IDE: меню, таймери, налаштування
+src/ClaudeCode.Process.pas        запуск консольних програм, фонові задачі (без ToolsAPI)
+src/ClaudeCode.PascalIndex.pas    токенайзер Object Pascal, оголошення, входження, структура (без ToolsAPI)
+src/ClaudeCode.CodeTools.pas      getUnitOutline, findSymbol, findReferences, renameSymbol
+src/ClaudeCode.TestRunner.pas     запуск DUnitX, результати з NUnit XML / консолі (без ToolsAPI)
+src/ClaudeCode.AppAutomation.pas  знімки вікон, дерево й дії UI Automation (без ToolsAPI)
+src/ClaudeCode.ProjectMap.pas     граф залежностей юнітів і цикли (без ToolsAPI)
+src/ClaudeCode.ProjectMapForm.pas вікно Project Map (WebView2, src/terminal/projectmap.html)
+src/ClaudeCode.DbInfo.pas         FireDAC-з'єднання в DFM-тексті, перевірка SQL лише на читання (без ToolsAPI)
+src/ClaudeCode.DbTools.pas        схема й запити через FireDAC (RTTI) у фоновому потоці
+src/ClaudeCode.Modernize.pas      перевірки модернізації та звіти FastMM (без ToolsAPI)
+src/ClaudeCode.ModernizeForm.pas  діалог Modernize Project
+src/ClaudeCode.Prompts.pas        MCP prompts (slash-команди) сервера delphi
+src/ClaudeCode.Timeline.pas       ходи та знімки файлів із хуків Claude Code (без ToolsAPI)
+src/ClaudeCode.TimelineForm.pas   вікно Claude Timeline
+src/ClaudeCode.InlineDiff.pas     перегляд запропонованих змін у редакторі коду
+tests/e2e/                        група проєктів для наскрізних тестів у справжній IDE
+tests/e2e-test.mjs                наскрізний тест інструментів у запущеній IDE з відкритою tests/e2e
+tests/mcp-call.mjs, ide-call.mjs  виклик одного інструмента запущеної IDE (сервер delphi / IDE-канал)
 tests/TestHost.dpr             консольний хост із фейковим бекендом
 tests/protocol-test.mjs        тест протоколу (Node, «сирий» WebSocket)
 tests/PanelHost.dpr            панель у звичайному VCL-вікні: запускає claude, вводить текст, знімає екран
@@ -205,6 +265,34 @@ dcc32 -B -NSSystem;System.Win;Winapi;Vcl;Vcl.Imaging -U../src -R../src -NU../dcu
 PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.dump.txt, panelhost.png
 ```
 
+### Наскрізні тести у справжній IDE
+
+`tests/e2e` — група проєктів (VCL-програма з формою, дата-модуль FireDAC/SQLite і DUnitX-проєкт, з навмисною
+помилкою в `TOrder.CalcTotal`) для перевірки інструментів у другому екземплярі IDE з власним профілем реєстру, щоб
+робоча IDE лишалася недоторканою:
+
+```bat
+rem один раз: скопіювати профіль і зареєструвати зібраний пакет (будь-яка тека)
+reg copy HKCU\Software\Embarcadero\BDS\37.0 HKCU\Software\Embarcadero\ClaudeDev\37.0 /s /f
+rem ...і вказати в Known Packages профілю ClaudeDev\37.0 цей ClaudeCodeIDE370.bpl
+set CLAUDE_DELPHI_LOGFILE=%TEMP%\claude-delphi.log
+bds.exe -rClaudeDev -ns tests\e2e\Orders.groupproj
+```
+
+Порт і токен — у `%USERPROFILE%\.claude\ide\<port>.lock` цього екземпляра; далі
+`node tests/mcp-call.mjs <port> <token> runTests`, `... getUnitOutline '{"unit":"OrderLogic"}'`,
+`node tests/ide-call.mjs <port> <token> openDiff '{...}'` тощо. `CLAUDE_DELPHI_LOGFILE` вмикає журнал пакета у файл.
+
+Повний набір (близько 90 перевірок, 10–15 хвилин) проганяється на такому екземплярі:
+
+```bat
+node tests/e2e-test.mjs <port> <token> <тека відкритої копії tests\e2e> <PID bds.exe> [розділи]
+```
+
+Розділи (через кому, за замовчуванням усі): `code`, `tests`, `forms`, `debug`, `app`, `project`, `db`, `modernize`,
+`inline`, `timeline`, `prompts`. Відкривайте копію `tests/e2e`, а не саму теку: тест змінює, відновлює й видаляє там
+файли, запускає програму й натискає кнопки у вікнах IDE (Project Map, Claude Timeline, підтвердження).
+
 ## Обмеження
 
 - `getDiagnostics` повертає дані Error Insight (LSP) для відкритих файлів; справжній вивід компілятора дає `buildProject`.
@@ -212,3 +300,9 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 - Позиції `character` — індекси UTF-16, обчислені з буфера редактора; на всіх крайніх випадках (табуляції, дуже довгі рядки) вони не перевірені.
 - Виправлення кодування бачить лише файли, записані через прийнятий diff або відкриті в редакторі; закриті файли, які Claude пише в режимі auto-accept, лишаються в кодуванні Claude.
 - API дебагера не дає списку локальних змінних: Claude читає код навколо поточного рядка й обчислює потрібне. Клас і текст винятку беруться з обчислення `ExceptObject` (за можливості).
+- Кадри стеку викликів називаються з коду (метод навколо рядка), а не дебагером: форматування заголовків кадрів дебагером викликає assert ядра дебагера Delphi 13.
+- Logpoints — це точки зупину, які зупиняють і відпускають програму: підходять для подій і циклів у сотні ітерацій, повільні для дуже «гарячого» коду (`maxHits` або умова).
+- `findSymbol`/`findReferences`/`renameSymbol` читають код, а не таблиці символів компілятора: імена порівнюються, а не розв'язуються (перевантаження й однойменні члени інших класів теж збігаються — тому в rename є dry run). Умовна компіляція ігнорується.
+- `getAppUI`/`appAction` потребують UI Automation: віконні VCL-контроли видно добре, графічні (TLabel, TSpeedButton) і FMX — частково; тоді працюють x/y на знімку з `captureApp`. Клавіші надсилаються контролу у фокусі (комбінації з Ctrl/Alt можуть не дійти); якщо після Enter, Tab, Esc чи Backspace іде ще текст, робиться пауза 100 мс, щоб клавіші дійшли по черзі. Поки logpoint на мить тримає програму, `captureApp`, `getAppUI` і `appAction` чекають (до 5 с), а не повертають помилку.
+- Інструменти бази даних працюють із FireDAC-з'єднаннями (з драйверами, встановленими в IDE).
+- Таймлайн бачить файли, змінені інструментами Edit/Write/MultiEdit Claude; зміни shell-командами не записуються.

@@ -1,0 +1,29 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{5D0F6C2A-1B3E-4F7A-9C11-7E2B8D4A6F00}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="OrdersApp.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="OrdersTests.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="OrdersApp">
+        <MSBuild Projects="OrdersApp.dproj"/>
+    </Target>
+    <Target Name="OrdersTests">
+        <MSBuild Projects="OrdersTests.dproj"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="OrdersApp;OrdersTests"/>
+    </Target>
+</Project>

@@ -77,6 +77,73 @@ begin
   end;
 end;
 
+{ A run of only inserted (or only deleted) lines can be placed in more than one way when its first
+  line equals the line after it ("end;" + new routine + "end;"). Like git, slide such runs down as
+  far as they go, so a new block reads as a whole routine instead of "end; ... begin ... Result". }
+procedure SlideRuns(var D: TDiffLines);
+var
+  I, J, K, N: Integer;
+  Pure: Boolean;
+  Run: TArray<TDiffLine>;
+  OldN, NewN: Integer;
+begin
+  N := Length(D);
+  I := 0;
+  while I < N do
+  begin
+    if D[I].Kind = dkEqual then
+    begin
+      Inc(I);
+      Continue;
+    end;
+    J := I;
+    while (J < N) and (D[J].Kind <> dkEqual) do
+      Inc(J);
+    Pure := True;
+    for K := I + 1 to J - 1 do
+      if D[K].Kind <> D[I].Kind then
+        Pure := False;
+    if Pure then
+      while (J < N) and (D[J].Kind = dkEqual) and (D[I].Text = D[J].Text) do
+      begin
+        // [run0, run1..] [eq]  ->  [eq] [run1.., run0]
+        Run := Copy(D, I, J - I);
+        D[I] := D[J];
+        for K := 1 to High(Run) do
+          D[I + K] := Run[K];
+        D[J] := Run[0];
+        Inc(I);
+        Inc(J);
+      end;
+    I := J;
+  end;
+  // Line numbers follow the new order.
+  OldN := 0;
+  NewN := 0;
+  for K := 0 to N - 1 do
+    case D[K].Kind of
+      dkEqual:
+        begin
+          Inc(OldN);
+          Inc(NewN);
+          D[K].OldLine := OldN;
+          D[K].NewLine := NewN;
+        end;
+      dkDelete:
+        begin
+          Inc(OldN);
+          D[K].OldLine := OldN;
+          D[K].NewLine := 0;
+        end;
+      dkInsert:
+        begin
+          Inc(NewN);
+          D[K].OldLine := 0;
+          D[K].NewLine := NewN;
+        end;
+    end;
+end;
+
 function ComputeLineDiff(const OldLines, NewLines: TArray<string>): TDiffLines;
 var
   Res: TList<TDiffLine>;
@@ -194,6 +261,7 @@ begin
     for I := 0 to Suf - 1 do
       Emit(dkEqual, NA - Suf + I, NB - Suf + I);
     Result := Res.ToArray;
+    SlideRuns(Result);
   finally
     Ids.Free;
     Res.Free;

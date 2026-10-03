@@ -54,6 +54,10 @@ function FixDelphiSourceEncoding(const Text: string; const OnDisk, Previous: TEn
   out Bytes: TBytes): Boolean;
 function IsDelphiSourceFile(const FileName: string): Boolean;
 
+{ Text encoded the way a file with encoding Enc was: same code page, BOM or no BOM. An ANSI file
+  whose new text no longer fits the code page becomes UTF-8 with a BOM. }
+function EncodeLike(const Text: string; const Enc: TEncodingInfo): TBytes;
+
 implementation
 
 uses
@@ -418,6 +422,21 @@ begin
     Exit(False); // the file was already BOM-less UTF-8: keep the project's convention
   Bytes := TEncoding.UTF8.GetPreamble + TEncoding.UTF8.GetBytes(Text);
   Result := True;
+end;
+
+function EncodeLike(const Text: string; const Enc: TEncodingInfo): TBytes;
+begin
+  case Enc.Kind of
+    tekUtf8Bom:
+      Result := TEncoding.UTF8.GetPreamble + TEncoding.UTF8.GetBytes(Text);
+    tekUtf16:
+      Result := TEncoding.Unicode.GetPreamble + TEncoding.Unicode.GetBytes(Text);
+    tekAnsi:
+      if not FitsAnsi(Text, Result) then
+        Result := TEncoding.UTF8.GetPreamble + TEncoding.UTF8.GetBytes(Text);
+  else
+    Result := TEncoding.UTF8.GetBytes(Text); // ASCII, UTF-8 without a BOM, empty
+  end;
 end;
 
 end.

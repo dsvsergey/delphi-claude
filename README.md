@@ -54,10 +54,27 @@ as `mcp__delphi__*` and Claude asks for permission before using them like any MC
 | `getDebugState` | the debugged process: state, current thread with call stack and source around the current line, the exception when stopped on one, all threads |
 | `evaluateExpression` | evaluates a Delphi expression in the stopped process (like Evaluate/Modify); side effects only when allowed |
 | `setBreakpoint` / `listBreakpoints` / `removeBreakpoint` | source breakpoints with an optional condition and pass count |
-| `debugControl` | `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (waits for the next stop and returns the new state), `run`, `terminate` |
+| `debugControl` | `start` (Run with debugging, like F9), `stepOver`, `stepInto`, `runUntilReturn`, `runToCursor`, `pause` (waits for the next stop and returns the new state), `run`, `terminate` |
+| `setLogpoint` / `getLogpointHits` / `removeLogpoint` | logpoints: a line records Delphi expressions (and optionally the call stack) each time it runs, and the program goes on; read the hits as a table |
 | `getFileHistory` | the IDE's local history of a file (`__history\name.~N~`): list of versions or the text of one |
+| `runTests` | builds a DUnitX project (found in the group) and runs it: each failing test with its message and the file/line of the test method; also in the **Claude Tests** tab of Messages |
+| `pasteDfm` | creates components from DFM text the way Ctrl+V does in the designer: nested controls, collections, events; returns the real names |
+| `getUnitOutline` | a unit's structure with line ranges: uses, types and members, routines and method bodies |
+| `findSymbol` / `findReferences` | declarations and uses of a name in the project's sources and text forms, comments and strings skipped |
+| `renameSymbol` | renames across units and forms: a dry run lists the occurrences with ids, then exactly the chosen ones are changed (open files in the editor, undoable; closed files keep their encoding) |
+| `getUnitDependencies` / `showProjectMap` | how units use each other (largest, most used, cycles) / the interactive map for the user |
+| `captureApp` / `getAppUI` / `appAction` | the running program: pictures of its windows, its UI Automation tree, and click/type/set text like a user (the user's foreground window keeps the focus) |
+| `listConnections` / `getDatabaseSchema` / `runQuery` | the FireDAC connections of the project's forms, the schema behind them, and read-only queries (one SELECT, run in a transaction that is rolled back) |
+| `analyzeModernization` | candidates for `win64`, `unicode`, `bde` (BDE/dbExpress/ADO to FireDAC) or `warnings` (a full build grouped by warning code), with advice |
+| `getMemoryLeaks` | the FastMM4/FastMM5 leak report of the program grouped by class, with allocation stacks |
+| `showTimeline` | opens the Claude Timeline for the user |
 
 Designer changes are not saved automatically: review them in the IDE and save or revert the form.
+
+**Slash commands.** The `delphi` server also offers ready workflows as MCP prompts; Claude Code shows them as
+commands: `/mcp__delphi__make-tests-pass`, `/mcp__delphi__hunt-bug <what goes wrong>`,
+`/mcp__delphi__screenshot-to-form <image>`, `/mcp__delphi__crud-form <table>`, `/mcp__delphi__modernize <scenario>`,
+`/mcp__delphi__explain-architecture`.
 A `claude` started outside the IDE can use the tools of the most recently started IDE with
 `claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
@@ -115,11 +132,15 @@ Menu **Tools → Claude Code**:
 - **Open in External Console**: the same in a separate console window (if WebView2 is unavailable).
 - **Build and Fix Errors with Claude**: saves modified files, builds the active project and, if the build fails, pastes the errors into the Claude panel as a request (press Enter to send).
 - **Explain Debugger Stop with Claude**: when the debugged program is stopped (breakpoint, exception, pause), pastes the exception, the current line with its source and the call stack into the Claude panel as a request.
+- **Make Tests Pass with Claude**: runs the DUnitX tests (`runTests`) and, if some fail, pastes them into the panel with the request to fix the code and run the tests again until they pass.
+- **Project Map...**: the unit dependency graph in a window: size, forms and data modules, cycles; click a unit for what it uses and what uses it, double-click to open it, **Ask Claude** to get it explained.
+- **Modernize Project with Claude...**: choose Win64, Unicode, database (BDE/dbExpress/ADO to FireDAC), compiler warnings or memory leaks; Claude analyzes the project and fixes it in batches with a build after each one.
+- **Claude Timeline...**: Claude's turns with the files each one changed (see below).
 - **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
-- **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, and whether context-menu requests are sent right away.
+- **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, whether context-menu requests are sent right away, whether proposed changes are reviewed **in the code editor** instead of the diff window, and whether Claude's turns are **recorded for the timeline**.
 
   ![Settings dialog](docs/images/settings.png)
 
@@ -146,6 +167,28 @@ Single changes can be skipped: **Space** or double-click takes/skips the change 
 between changes; Accept writes only the taken changes (taking none is a rejection).
 
 ![Diff window: the proposed change to Unit1.pas, changes can be taken or skipped one by one](docs/images/diff-window.png)
+
+### Reviewing changes in the editor
+
+With **Settings… → Show Claude's proposed changes in the code editor**, the proposal goes straight into the editor
+(as one undoable edit) instead of a diff window. Added and changed lines get a green background, places where lines
+were removed a red marker, and a bar above the editor shows the number of changes, the removed text of the current one
+and the buttons **Previous / Next** (`Ctrl+Alt+PgUp/PgDn`), **Undo this change** (`Ctrl+Alt+Z`), **Accept all**
+(`Ctrl+Alt+Enter`) and **Reject all** (`Ctrl+Alt+Backspace`). You can edit the text while reviewing: the highlighting
+is always the difference from the original. Accept saves the file and answers Claude with the text as it is; Reject puts
+the original back byte for byte. Forms, project files, new files and tabs with unsaved changes still use the diff window.
+
+### Claude Timeline
+
+With **Settings… → Record Claude's turns**, sessions started from the IDE get Claude Code hooks (`--settings`) that
+report each request, each file about to be edited and the end of each turn to the IDE (`POST /hook`, same token).
+**Tools → Claude Code → Claude Timeline** lists the turns with their files and changed lines; **Show Diff** shows what
+a turn did to a file, **Rewind to Before This Turn** puts every file changed in that turn or later back exactly as it
+was (open editors change in place and can be undone with Ctrl+Z). Claude's conversation itself is not changed.
+The IDE answers a hook only after it has handled it, so a file is copied before Claude writes it (if the IDE is busy
+for more than 5 seconds, Claude goes on without waiting). The hooks settings file
+(`%USERPROFILE%\.claude\ide\<port>.delphi-settings.json`) is removed when the IDE closes; files left by an IDE that
+crashed are removed at the next start.
 
 ### Files Claude changes on disk
 
@@ -186,6 +229,24 @@ src/ClaudeCode.WebViewHost.pas    lightweight WebView2 host (the page survives r
 src/ClaudeCode.ConPty.pas         Windows pseudo console + Job Object
 src/terminal/                     terminal page and .rc files for resources
 src/ClaudeCode.Wizard.pas         IDE wizard: menu, timers, settings
+src/ClaudeCode.Process.pas        running console programs, background jobs (no ToolsAPI)
+src/ClaudeCode.PascalIndex.pas    Object Pascal tokenizer, declarations, occurrences, outlines (no ToolsAPI)
+src/ClaudeCode.CodeTools.pas      getUnitOutline, findSymbol, findReferences, renameSymbol
+src/ClaudeCode.TestRunner.pas     running DUnitX executables, NUnit XML / console results (no ToolsAPI)
+src/ClaudeCode.AppAutomation.pas  window pictures, UI Automation tree and actions (no ToolsAPI)
+src/ClaudeCode.ProjectMap.pas     unit dependency graph and cycles (no ToolsAPI)
+src/ClaudeCode.ProjectMapForm.pas Project Map window (WebView2, src/terminal/projectmap.html)
+src/ClaudeCode.DbInfo.pas         FireDAC connections in DFM text, read-only SQL check (no ToolsAPI)
+src/ClaudeCode.DbTools.pas        schema and queries through FireDAC (RTTI), in a background thread
+src/ClaudeCode.Modernize.pas      modernization checks and FastMM leak reports (no ToolsAPI)
+src/ClaudeCode.ModernizeForm.pas  Modernize Project dialog
+src/ClaudeCode.Prompts.pas        MCP prompts (slash commands) of the delphi server
+src/ClaudeCode.Timeline.pas       turns and file snapshots from Claude Code hooks (no ToolsAPI)
+src/ClaudeCode.TimelineForm.pas   Claude Timeline window
+src/ClaudeCode.InlineDiff.pas     reviewing proposed changes in the code editor
+tests/e2e/                        sample project group for end-to-end tests in a real IDE
+tests/e2e-test.mjs                end-to-end test of the tools in a running IDE with tests/e2e open
+tests/mcp-call.mjs, ide-call.mjs  call one tool of a running IDE (delphi server / IDE channel)
 tests/TestHost.dpr                console host with a fake backend
 tests/protocol-test.mjs           protocol test (Node, raw WebSocket)
 tests/PanelHost.dpr               the panel in a plain VCL window: starts claude, types text, takes a screenshot
@@ -205,6 +266,35 @@ dcc32 -B -NSSystem;System.Win;Winapi;Vcl;Vcl.Imaging -U../src -R../src -NU../dcu
 PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.dump.txt, panelhost.png
 ```
 
+### End-to-end tests in a real IDE
+
+`tests/e2e` is a project group (a VCL app with a form, a FireDAC/SQLite data module and a DUnitX project, with a
+deliberate bug in `TOrder.CalcTotal`) for trying the tools in a second IDE instance with its own registry profile, so
+the IDE you work in is not touched:
+
+```bat
+rem once: copy your profile, register the package you built (any output folder)
+reg copy HKCU\Software\Embarcadero\BDS\37.0 HKCU\Software\Embarcadero\ClaudeDev\37.0 /s /f
+rem ...then set Known Packages of ClaudeDev\37.0 to that ClaudeCodeIDE370.bpl
+set CLAUDE_DELPHI_LOGFILE=%TEMP%\claude-delphi.log
+bds.exe -rClaudeDev -ns tests\e2e\Orders.groupproj
+```
+
+The lock file `%USERPROFILE%\.claude\ide\<port>.lock` of that instance has the port and token; then
+`node tests/mcp-call.mjs <port> <token> runTests`, `... getUnitOutline '{"unit":"OrderLogic"}'`,
+`node tests/ide-call.mjs <port> <token> openDiff '{...}'` and so on. `CLAUDE_DELPHI_LOGFILE` makes the package write
+its log to a file.
+
+The whole suite (about 90 checks, 10–15 minutes) runs against such an instance:
+
+```bat
+node tests/e2e-test.mjs <port> <token> <folder of the opened copy of tests\e2e> <bds.exe PID> [sections]
+```
+
+Sections (comma-separated, all by default): `code`, `tests`, `forms`, `debug`, `app`, `project`, `db`, `modernize`,
+`inline`, `timeline`, `prompts`. Open a copy of `tests/e2e`, not the folder itself: the test edits, restores and
+deletes files there, runs the program and clicks through IDE windows (Project Map, Claude Timeline, confirmations).
+
 ## Limitations
 
 - `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.
@@ -212,3 +302,9 @@ PanelHost.exe C:\path\to\project C:\tmp\out   # out: panelhost.log, panelhost.du
 - `character` positions are UTF-16 indexes computed from the editor buffer; they have not been verified against every IDE edge case (tabs, very long lines).
 - Encoding repair only sees files written through an accepted diff or open in the editor; files Claude writes in auto-accept mode while closed keep whatever encoding Claude used.
 - The debugger API has no list of local variables: Claude reads the code around the current line and evaluates what it needs. Exception class/message come from evaluating `ExceptObject` (best effort).
+- Call stack frames are named from the source (the method around the line), not by the debugger: formatting the debugger's frame headers makes the Delphi 13 debugger kernel assert.
+- Logpoints are breakpoints that stop and continue the program: fine for events and loops of hundreds of iterations, slow for very hot code (use `maxHits` or a condition).
+- `findSymbol`/`findReferences`/`renameSymbol` read the code, not the compiler's symbol tables: names are matched, not resolved (overloads and same-named members of other classes match too; that is why rename has a dry run). Conditional compilation is ignored.
+- `getAppUI`/`appAction` need UI Automation: VCL windowed controls are exposed well, graphic controls (TLabel, TSpeedButton) and FMX only partly; then x/y on the picture from `captureApp` works. Keys are posted to the focused control (Ctrl/Alt shortcuts may not reach the program); after Enter, Tab, Esc or Backspace followed by more text the keys pause for 100 ms so they arrive in order. While a logpoint holds the program for a moment, `captureApp`, `getAppUI` and `appAction` wait (up to 5 s) instead of failing.
+- Database tools support FireDAC connections (with the drivers installed in the IDE).
+- The timeline records files changed through Claude's Edit/Write/MultiEdit tools; files changed by shell commands are not recorded.

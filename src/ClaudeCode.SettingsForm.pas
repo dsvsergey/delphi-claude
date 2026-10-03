@@ -17,6 +17,8 @@ type
     DelphiTools: Boolean;     // pass --mcp-config with the "delphi" server
     SyncEditor: Boolean;      // apply Claude's file changes to open editors
     SubmitRequests: Boolean;  // context menu requests are sent right away
+    Timeline: Boolean;        // record Claude's turns through hooks (--settings)
+    InlineDiff: Boolean;      // show proposed changes in the code editor instead of the diff window
     { Arguments added to the claude command line (without --mcp-config). }
     function CommandArgs: string;
   end;
@@ -57,7 +59,7 @@ var
   Y: Integer;
   PanelCmd, ConsoleCmd, Extra: TEdit;
   Model, Mode: TComboBox;
-  Tools, Sync, Submit: TCheckBox;
+  Tools, Sync, Submit, Timeline, InlineDiff: TCheckBox;
   Ok, Cancel: TButton;
 
   procedure Caption(const Text: string);
@@ -126,6 +128,9 @@ begin
     Tools := Check('Give Claude the Delphi tools (build, project, form designer, debugger)', Settings.DelphiTools);
     Sync := Check('Apply Claude''s file changes to open editors (undo with Ctrl+Z)', Settings.SyncEditor);
     Submit := Check('Send editor context-menu requests right away (otherwise only paste them)', Settings.SubmitRequests);
+    InlineDiff := Check('Show Claude''s proposed changes in the code editor (otherwise in a diff window)',
+      Settings.InlineDiff);
+    Timeline := Check('Record Claude''s turns for the timeline and rewinding (Claude Code hooks)', Settings.Timeline);
     Inc(Y, 8);
 
     Cancel := TButton.Create(F);
@@ -155,6 +160,8 @@ begin
       Settings.DelphiTools := Tools.Checked;
       Settings.SyncEditor := Sync.Checked;
       Settings.SubmitRequests := Submit.Checked;
+      Settings.InlineDiff := InlineDiff.Checked;
+      Settings.Timeline := Timeline.Checked;
     end;
   finally
     F.Free;

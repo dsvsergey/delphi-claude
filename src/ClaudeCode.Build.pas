@@ -39,6 +39,7 @@ type
     Error: string;  // the build could not be run at all
     Output: string;
     Messages: TArray<TBuildMessage>;
+    OutputFile: string; // what the build produced (.exe/.bpl), when MSBuild reported it
     function Count(Severity: TBuildSeverity): Integer;
   end;
 
@@ -65,12 +66,13 @@ function ParseBuildLine(const Line, BaseDir: string; out Msg: TBuildMessage): Bo
 function ParseBuildOutput(const Output, BaseDir: string): TArray<TBuildMessage>;
 { Runs the build in the calling thread. Cancelled is polled while it runs. }
 function RunBuild(const Req: TBuildRequest; const Cancelled: TFunc<Boolean>): TBuildResult;
+{ The file MSBuild reported as the project's output ("X.dproj -> C:\...\X.exe"), or ''. }
+function ParseOutputFile(const Output: string): string;
 
 implementation
 
 uses
-  Winapi.Windows, System.Diagnostics, System.RegularExpressions, System.Math,
-  System.Generics.Collections, ClaudeCode.ConPty;
+  System.RegularExpressions, System.Generics.Collections, ClaudeCode.Process, ClaudeCode.Utils;
 
 { TBuildMessage }
 
@@ -126,6 +128,8 @@ var
   ReDcc: TRegEx;
   // MSBUILD : error MSB1009: text [project]
   ReUnlocated: TRegEx;
+  // Project1.dproj -> C:\p\Win32\Debug\Project1.exe
+  ReOutputFile: TRegEx;
 
 procedure InitRegexes;
 const
@@ -142,6 +146,8 @@ begin
   ReUnlocated := TRegEx.Create(
     '^\s*(?<file>[^:]*?)\s*:\s*(?<kind>fatal error|error|warning)\s+(?<code>[A-Za-z]+\d+)\s*:\s*(?<text>.*?)' + Tail,
     [roIgnoreCase]);
+  ReOutputFile := TRegEx.Create('^\s*\S.*?\.(?:dproj|cbproj)\s+->\s+(?<file>.+?\.(?:exe|dll|bpl))\s*$',
+    [roIgnoreCase, roMultiLine]);
 end;
 
 function KindToSeverity(const Kind: string): TBuildSeverity;
@@ -248,46 +254,18 @@ end;
 
 { Running }
 
-function DecodeOutput(const Bytes: TBytes): string;
+function ParseOutputFile(const Output: string): string;
 var
-  Len: Integer;
+  M: TMatch;
 begin
-  if Length(Bytes) = 0 then
-    Exit('');
-  Len := MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, PAnsiChar(@Bytes[0]), Length(Bytes), nil, 0);
-  if Len > 0 then
-  begin
-    SetLength(Result, Len);
-    MultiByteToWideChar(CP_UTF8, 0, PAnsiChar(@Bytes[0]), Length(Bytes), PChar(Result), Len);
-  end
-  else
-    Result := TEncoding.GetEncoding(GetOEMCP).GetString(Bytes);
+  Result := '';
+  for M in ReOutputFile.Matches(Output) do
+    Result := Trim(M.Groups['file'].Value);
 end;
 
 function RunBuild(const Req: TBuildRequest; const Cancelled: TFunc<Boolean>): TBuildResult;
 var
-  SA: TSecurityAttributes;
-  ReadPipe, WritePipe, NulIn, Job: THandle;
-  SI: TStartupInfo;
-  PI: TProcessInformation;
-  Cmd: string;
-  Watch: TStopwatch;
-  Buf: array[0..65535] of Byte;
-  Avail, Got, Code: DWORD;
-  Bytes: TBytes;
-  Exited: Boolean;
-
-  procedure Drain;
-  begin
-    while PeekNamedPipe(ReadPipe, nil, 0, nil, @Avail, nil) and (Avail > 0) do
-    begin
-      if not ReadFile(ReadPipe, Buf, Min(Avail, DWORD(SizeOf(Buf))), Got, nil) or (Got = 0) then
-        Break;
-      SetLength(Bytes, Length(Bytes) + Integer(Got));
-      Move(Buf[0], Bytes[Length(Bytes) - Integer(Got)], Got);
-    end;
-  end;
-
+  P: TProcessResult;
 begin
   Result := Default(TBuildResult);
   if not FileExists(Req.RsVars) then
@@ -300,81 +278,16 @@ begin
     Result.Error := 'Project file not found: ' + Req.ProjectFile;
     Exit;
   end;
-
-  SA.nLength := SizeOf(SA);
-  SA.lpSecurityDescriptor := nil;
-  SA.bInheritHandle := True;
-  if not CreatePipe(ReadPipe, WritePipe, @SA, 0) then
-  begin
-    Result.Error := 'CreatePipe failed: ' + SysErrorMessage(GetLastError);
+  P := RunProcess(Req.CommandLine, ExtractFilePath(Req.ProjectFile), Req.TimeoutSec, Cancelled);
+  Result.Error := P.Error;
+  Result.ExitCode := P.ExitCode;
+  Result.TimedOut := P.TimedOut;
+  Result.ElapsedMs := P.ElapsedMs;
+  Result.Output := P.Output;
+  if Result.Error <> '' then
     Exit;
-  end;
-  SetHandleInformation(ReadPipe, HANDLE_FLAG_INHERIT, 0);
-  NulIn := CreateFile('NUL', GENERIC_READ, FILE_SHARE_READ or FILE_SHARE_WRITE, @SA, OPEN_EXISTING, 0, 0);
-  Job := 0;
-  try
-    FillChar(SI, SizeOf(SI), 0);
-    SI.cb := SizeOf(SI);
-    SI.dwFlags := STARTF_USESTDHANDLES or STARTF_USESHOWWINDOW;
-    SI.wShowWindow := SW_HIDE;
-    SI.hStdInput := NulIn;
-    SI.hStdOutput := WritePipe;
-    SI.hStdError := WritePipe;
-    Cmd := Req.CommandLine;
-    UniqueString(Cmd);
-    FillChar(PI, SizeOf(PI), 0);
-    Watch := TStopwatch.StartNew;
-    if not CreateProcess(nil, PChar(Cmd), nil, nil, True,
-      CREATE_NO_WINDOW or CREATE_SUSPENDED or CREATE_UNICODE_ENVIRONMENT, nil,
-      PChar(ExtractFilePath(Req.ProjectFile)), SI, PI) then
-    begin
-      Result.Error := 'Could not start MSBuild: ' + SysErrorMessage(GetLastError);
-      Exit;
-    end;
-    // The write end now lives in the child only, so the pipe breaks when the build ends.
-    CloseHandle(WritePipe);
-    WritePipe := 0;
-    Job := CreateKillOnCloseJob;
-    if Job <> 0 then
-      AssignProcessToJobObject(Job, PI.hProcess);
-    ResumeThread(PI.hThread);
-    CloseHandle(PI.hThread);
-    try
-      Exited := False;
-      repeat
-        Drain;
-        if WaitForSingleObject(PI.hProcess, 50) = WAIT_OBJECT_0 then
-          Exited := True
-        else if (Assigned(Cancelled) and Cancelled()) or
-                ((Req.TimeoutSec > 0) and (Watch.ElapsedMilliseconds > Int64(Req.TimeoutSec) * 1000)) then
-        begin
-          Result.TimedOut := not (Assigned(Cancelled) and Cancelled());
-          if Job <> 0 then
-            TerminateJobObject(Job, 1)
-          else
-            TerminateProcess(PI.hProcess, 1);
-          WaitForSingleObject(PI.hProcess, 5000);
-          Exited := True;
-        end;
-      until Exited;
-      Drain;
-      GetExitCodeProcess(PI.hProcess, Code);
-      Result.ExitCode := Code;
-    finally
-      CloseHandle(PI.hProcess);
-    end;
-    Result.ElapsedMs := Watch.ElapsedMilliseconds;
-  finally
-    if WritePipe <> 0 then
-      CloseHandle(WritePipe);
-    CloseHandle(ReadPipe);
-    if NulIn <> INVALID_HANDLE_VALUE then
-      CloseHandle(NulIn);
-    if Job <> 0 then
-      CloseHandle(Job); // kills anything the build left running (msbuild nodes)
-  end;
-  Result.Output := DecodeOutput(Bytes);
   Result.Messages := ParseBuildOutput(Result.Output, ExtractFilePath(Req.ProjectFile));
+  Result.OutputFile := ParseOutputFile(Result.Output);
   Result.Success := (Result.ExitCode = 0) and not Result.TimedOut and
     (Result.Count(bsError) = 0) and (Result.Count(bsFatal) = 0);
 end;
@@ -420,7 +333,8 @@ begin
   end;
   if Terminated then
     Exit;
-  // Queued against this thread so Cancel/Destroy can drop it.
+  // Queued against this thread so Cancel/Destroy can drop it; the callback itself then runs from
+  // the message loop (RunInMainLoop), where IDE services can wait for the IDE's own work.
   Queue(
     procedure
     var
@@ -430,7 +344,11 @@ begin
       FOnDone := nil;
       FRunner.FFinished := FRunner.FThread;
       FRunner.FThread := nil;
-      Done(R);
+      RunInMainLoop(
+        procedure
+        begin
+          Done(R);
+        end);
     end);
 end;
 

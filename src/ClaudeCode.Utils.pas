@@ -15,6 +15,16 @@ var
   LogProc: TLogProc;
 
 procedure Log(const Msg: string);
+{ Runs Proc in the main thread from the regular message loop (a posted window message), like a
+  user action - not from inside TThread.Queue/CheckSynchronize. IDE services that wait for work
+  the IDE itself queues (the debugger starting a program, evaluating at a stop, the designer
+  pasting) fail or hang when called from inside CheckSynchronize, which is not re-entrant.
+  Callable from any thread. }
+procedure RunInMainLoop(const Proc: TProc);
+{ The same, after Ms milliseconds (a timer of the same window). }
+procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
+{ Runs what RunInMainLoop has queued so far (main thread; used when shutting down). }
+procedure FlushMainLoop;
 
 function PathFromUri(const S: string): string;
 function PathToUri(const Path: string): string;
@@ -28,15 +38,173 @@ function Utf8BytesToString(const Bytes: TBytes): string;
 implementation
 
 uses
-  Winapi.Windows;
+  Winapi.Windows, Winapi.Messages, System.SyncObjs, System.Generics.Collections;
+
+const
+  WM_RUN_QUEUED = WM_APP + 77;
+
+type
+  TMainLoopDispatcher = class
+  private
+    FWnd: HWND;
+    FLock: TCriticalSection;
+    FQueue: TQueue<System.SysUtils.TProc>;
+    FTimers: TDictionary<UIntPtr, System.SysUtils.TProc>;
+    FNextTimer: UIntPtr;
+    procedure WndProc(var Msg: TMessage);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Post(const Proc: System.SysUtils.TProc);
+  end;
+
+var
+  Dispatcher: TMainLoopDispatcher;
+
+constructor TMainLoopDispatcher.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+  FQueue := TQueue<System.SysUtils.TProc>.Create;
+  FTimers := TDictionary<UIntPtr, System.SysUtils.TProc>.Create;
+  FNextTimer := 1;
+  FWnd := AllocateHWnd(WndProc);
+end;
+
+destructor TMainLoopDispatcher.Destroy;
+begin
+  DeallocateHWnd(FWnd);
+  FTimers.Free;
+  FQueue.Free;
+  FLock.Free;
+  inherited;
+end;
+
+procedure TMainLoopDispatcher.Post(const Proc: System.SysUtils.TProc);
+begin
+  FLock.Enter;
+  try
+    FQueue.Enqueue(Proc);
+  finally
+    FLock.Leave;
+  end;
+  PostMessage(FWnd, WM_RUN_QUEUED, 0, 0);
+end;
+
+procedure TMainLoopDispatcher.WndProc(var Msg: TMessage);
+var
+  Proc: System.SysUtils.TProc;
+begin
+  if Msg.Msg = WM_TIMER then
+  begin
+    KillTimer(FWnd, Msg.WParam);
+    if FTimers.TryGetValue(Msg.WParam, Proc) then
+    begin
+      FTimers.Remove(Msg.WParam);
+      try
+        Proc();
+      except
+        on E: Exception do
+          Log('Main loop task failed: ' + E.ClassName + ': ' + E.Message);
+      end;
+    end;
+    Exit;
+  end;
+  if Msg.Msg <> WM_RUN_QUEUED then
+  begin
+    Msg.Result := DefWindowProc(FWnd, Msg.Msg, Msg.WParam, Msg.LParam);
+    Exit;
+  end;
+  // One item per message, so a long-running item never starves the rest of the message loop.
+  FLock.Enter;
+  try
+    if FQueue.Count = 0 then
+      Exit;
+    Proc := FQueue.Dequeue();
+  finally
+    FLock.Leave;
+  end;
+  try
+    Proc();
+  except
+    on E: Exception do
+      Log('Main loop task failed: ' + E.ClassName + ': ' + E.Message);
+  end;
+end;
+
+procedure RunInMainLoop(const Proc: TProc);
+begin
+  Dispatcher.Post(Proc);
+end;
+
+procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
+var
+  Id: UIntPtr;
+begin
+  // Main thread only (the timers belong to the dispatcher's window).
+  Id := Dispatcher.FNextTimer;
+  Inc(Dispatcher.FNextTimer);
+  Dispatcher.FTimers.Add(Id, Proc);
+  SetTimer(Dispatcher.FWnd, Id, Ms, nil);
+end;
+
+procedure FlushMainLoop;
+var
+  Msg: TMessage;
+  I: Integer;
+begin
+  if (Dispatcher = nil) or (TThread.CurrentThread.ThreadID <> MainThreadID) then
+    Exit;
+  Msg := Default(TMessage);
+  Msg.Msg := WM_RUN_QUEUED;
+  for I := 1 to 1000 do
+  begin
+    Dispatcher.FLock.Enter;
+    try
+      if Dispatcher.FQueue.Count = 0 then
+        Break;
+    finally
+      Dispatcher.FLock.Leave;
+    end;
+    Dispatcher.WndProc(Msg);
+  end;
+end;
+
+var
+  LogFileName: string;
+
+{ With CLAUDE_DELPHI_LOGFILE set, the log also goes to that file (diagnostics). }
+procedure LogToFile(const Line: string);
+var
+  F: TextFile;
+begin
+  if LogFileName = '' then
+    Exit;
+  try
+    AssignFile(F, LogFileName);
+    if FileExists(LogFileName) then
+      Append(F)
+    else
+      Rewrite(F);
+    try
+      Writeln(F, Line);
+    finally
+      CloseFile(F);
+    end;
+  except
+    // Logging must never fail the caller.
+  end;
+end;
 
 procedure Log(const Msg: string);
 var
   Stamped: string;
 begin
-  Stamped := FormatDateTime('hh:nn:ss', Now) + '  ' + Msg;
+  Stamped := FormatDateTime('hh:nn:ss.zzz', Now) + '  ' + Msg;
+  // Main thread only, so lines from several threads never collide in the file.
   if TThread.CurrentThread.ThreadID = MainThreadID then
   begin
+    LogToFile(Stamped);
     if Assigned(LogProc) then
       LogProc(Stamped);
   end
@@ -44,6 +212,7 @@ begin
     TThread.Queue(nil,
       procedure
       begin
+        LogToFile(Stamped);
         if Assigned(LogProc) then
           LogProc(Stamped);
       end);
@@ -233,4 +402,9 @@ begin
     Result := TJSONBool(V).AsBoolean;
 end;
 
+initialization
+  LogFileName := GetEnvironmentVariable('CLAUDE_DELPHI_LOGFILE');
+  Dispatcher := TMainLoopDispatcher.Create;
+finalization
+  FreeAndNil(Dispatcher);
 end.

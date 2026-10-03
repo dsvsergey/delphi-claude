@@ -8,7 +8,8 @@ program TestHost;
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
-  ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo,
+  ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo, ClaudeCode.PascalIndex, ClaudeCode.TestRunner,
+  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -348,7 +349,406 @@ begin
   Expect((InA.Start = 11) and (InA.Len = 3) and (InB.Start = 11) and (InB.Len = 3), 'in-line change');
   InlineChange('abc', 'abXYc', InA, InB);
   Expect((InA.Start = 3) and (InA.Len = 0) and (InB.Start = 3) and (InB.Len = 2), 'in-line insertion');
+  // A new routine after "end;": the inserted run is the whole routine, not "end; ... Result".
+  D := ComputeLineDiff(['a', 'x', 'b', 'end;', '', 'g;'], ['a', 'y', 'b', 'end;', '', 'h;', 'end;', '', 'g;']);
+  S := '';
+  for L in D do
+    case L.Kind of
+      dkEqual: S := S + ' ' + L.Text + IntToStr(L.NewLine);
+      dkDelete: S := S + '-' + L.Text + IntToStr(L.OldLine);
+      dkInsert: S := S + '+' + L.Text + IntToStr(L.NewLine);
+    end;
+  Expect(S = ' a1-x2+y2 b3 end;4 5+h;6+end;7+8 g;9', 'inserted run slid to the routine: ' + S);
   Writeln('DIFF OK');
+end;
+
+{ RunInMainLoop posts window messages; a console host has to dispatch them. }
+procedure PumpMessages;
+var
+  Msg: TMsg;
+begin
+  while PeekMessage(Msg, 0, 0, 0, PM_REMOVE) do
+  begin
+    TranslateMessage(Msg);
+    DispatchMessage(Msg);
+  end;
+end;
+
+function FindDecl(const Info: TPasUnitInfo; const Qualified: string; Kind: TPasDeclKind; out D: TPasDecl): Boolean;
+var
+  X: TPasDecl;
+begin
+  for X in Info.Decls do
+    if SameText(X.QualifiedName, Qualified) and (X.Kind = Kind) then
+    begin
+      D := X;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+procedure PascalIndexSelfTest;
+const
+  Src =
+    'unit Demo.Orders;'#13#10 +                                          // 1
+    'interface'#13#10 +                                                  // 2
+    'uses System.SysUtils, Vcl.Forms;'#13#10 +                           // 3
+    'type'#13#10 +                                                       // 4
+    '  TKind = (kNone, kBig = 5);'#13#10 +                               // 5
+    '  TOrder = class(TPersistent, IInterface)'#13#10 +                  // 6
+    '  private'#13#10 +                                                  // 7
+    '    FTotal, FTax: Currency; // a comment with Save'#13#10 +         // 8
+    '  public'#13#10 +                                                   // 9
+    '    [Weak] FOwner: TObject;'#13#10 +                                // 10
+    '    procedure Save(const Name: string = ''Save''); virtual;'#13#10 + // 11
+    '    class function Create2: TOrder; static;'#13#10 +                // 12
+    '    property Total: Currency read FTotal write FTotal;'#13#10 +     // 13
+    '  end;'#13#10 +                                                     // 14
+    '  TRec = packed record'#13#10 +                                     // 15
+    '    case Tag: Integer of'#13#10 +                                   // 16
+    '      0: (A: Integer);'#13#10 +                                     // 17
+    '      1: (B: Double);'#13#10 +                                      // 18
+    '  end;'#13#10 +                                                     // 19
+    '  TList<T> = class end;'#13#10 +                                    // 20
+    'const MaxOrders: Integer = 10;'#13#10 +                             // 21
+    'function Helper(X: Integer): Integer;'#13#10 +                      // 22
+    'implementation'#13#10 +                                             // 23
+    'uses Data.DB;'#13#10 +                                              // 24
+    'procedure TOrder.Save(const Name: string);'#13#10 +                 // 25
+    'var I: Integer;'#13#10 +                                            // 26
+    '  procedure Local; begin end;'#13#10 +                              // 27
+    'begin'#13#10 +                                                      // 28
+    '  case I of 1: begin end; end;'#13#10 +                             // 29
+    '  try Self.Save(''x''); finally end;'#13#10 +                       // 30
+    'end;'#13#10 +                                                       // 31
+    'class function TOrder.Create2: TOrder; begin Result := nil; end;'#13#10 + // 32
+    'function Helper(X: Integer): Integer;'#13#10 +                      // 33
+    'begin'#13#10 +                                                      // 34
+    '  Result := X; { Save } // Save'#13#10 +                            // 35
+    'end;'#13#10 +                                                       // 36
+    'end.'#13#10;
+var
+  Info: TPasUnitInfo;
+  D: TPasDecl;
+  Occ: TArray<TPasOccurrence>;
+  Renamed, F, Text, Outline: string;
+  Files, Units: Integer;
+begin
+  Info := ParsePascalUnit(Src);
+  Expect((Info.UnitName = 'Demo.Orders') and (Info.UnitKind = 'unit') and (Info.LineCount = 37), 'unit header');
+  Expect((Length(Info.IntfUses) = 2) and (Info.IntfUses[1].Name = 'Vcl.Forms') and (Length(Info.ImplUses) = 1),
+    'uses clauses');
+  Expect(FindDecl(Info, 'TOrder', pdClass, D) and (D.Line = 6) and (D.EndLine = 14) and
+    (D.Ancestor = 'TPersistent, IInterface'), 'class range/ancestor: ' + D.Ancestor);
+  Expect(FindDecl(Info, 'TOrder.FTax', pdField, D) and (D.Visibility = 'private'), 'field list');
+  Expect(FindDecl(Info, 'TOrder.FOwner', pdField, D) and (D.Visibility = 'public'), 'field after attribute');
+  Expect(FindDecl(Info, 'TOrder.Save', pdMethod, D) and (D.Line = 11) and
+    D.Signature.StartsWith('procedure Save(const Name'), 'method decl: ' + D.Signature);
+  Expect(FindDecl(Info, 'TOrder.Create2', pdMethod, D), 'class function decl');
+  Expect(FindDecl(Info, 'TOrder.Total', pdProperty, D) and (D.Line = 13), 'property');
+  Expect(FindDecl(Info, 'TKind', pdEnum, D) and FindDecl(Info, 'TKind.kBig', pdEnumValue, D), 'enum');
+  Expect(FindDecl(Info, 'TRec', pdRecord, D) and (D.EndLine = 19) and FindDecl(Info, 'TRec.B', pdField, D),
+    'variant record');
+  Expect(FindDecl(Info, 'TList', pdClass, D) and (D.Line = 20), 'generic class');
+  Expect(FindDecl(Info, 'MaxOrders', pdConst, D), 'typed const');
+  Expect(FindDecl(Info, 'Helper', pdRoutine, D) and (D.Section = 'interface') and (D.Line = 22), 'routine decl');
+  Expect(FindDecl(Info, 'TOrder.Save', pdMethodImpl, D) and (D.Line = 25) and (D.EndLine = 31) and
+    (D.Section = 'implementation'), Format('method body %d-%d', [D.Line, D.EndLine]));
+  Expect(FindDecl(Info, 'TOrder.Create2', pdMethodImpl, D) and (D.EndLine = 32), 'one-line body');
+  Expect(not FindDecl(Info, 'Local', pdRoutine, D), 'nested routine not listed');
+  Expect(not FindDecl(Info, 'I', pdVar, D), 'local var not listed');
+
+  // Save: decl 11, impl 25, call 30; not in comments (8, 35) or strings (11's default value).
+  Occ := FindOccurrences(Src, 'save');
+  Expect(Length(Occ) = 3, Format('%d occurrences of Save', [Length(Occ)]));
+  Expect((Occ[0].Line = 11) and (Occ[1].Line = 25) and (Occ[1].Qualifier = 'TOrder') and
+    (Occ[2].Line = 30) and (Occ[2].Qualifier = 'Self'), 'occurrence lines and qualifiers');
+  Renamed := ReplaceOccurrences(Src, Occ, 'Store');
+  Expect((Length(FindOccurrences(Renamed, 'Save')) = 0) and (Length(FindOccurrences(Renamed, 'Store')) = 3) and
+    Renamed.Contains('{ Save }') and Renamed.Contains('''Save'''), 'rename leaves comments and strings');
+  Expect(SourceLine(Src, 25) = 'procedure TOrder.Save(const Name: string);', 'source line');
+  Expect(IsValidIdentifier('Store') and not IsValidIdentifier('begin') and not IsValidIdentifier('1x'), 'identifiers');
+  Outline := UnitOutlineText(Info, 'Demo.Orders.pas', True);
+  Expect(Outline.Contains('procedure TOrder.Save(const Name: string);  [25-31]') and
+    Outline.Contains('type TOrder = class(TPersistent, IInterface)  [6-14]'), 'outline:'#13#10 + Outline);
+
+  // Every unit of this project parses into something sensible.
+  Files := 0;
+  Units := 0;
+  for F in TDirectory.GetFiles(TPath.Combine(ExtractFilePath(ParamStr(0)), '..\src'), '*.pas') do
+  begin
+    Inc(Files);
+    Text := TFile.ReadAllText(F);
+    Info := ParsePascalUnit(Text);
+    Expect(SameText(Info.UnitName + '.pas', ExtractFileName(F)), 'unit name of ' + F);
+    for D in Info.Decls do
+      Expect(D.EndLine >= D.Line, Format('%s: %s ends before it starts', [ExtractFileName(F), D.QualifiedName]));
+    if FindDecl(Info, 'TMcpServer.Start', pdMethodImpl, D) then
+      Inc(Units);
+    if FindDecl(Info, 'TPasParser.Parse', pdMethodImpl, D) then
+      Inc(Units);
+  end;
+  Expect((Files > 20) and (Units = 2), Format('project sources: %d files, %d probes', [Files, Units]));
+  Writeln('PASCAL INDEX OK');
+end;
+
+procedure TestRunnerSelfTest;
+const
+  Xml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'#13#10 +
+    '<test-results name="T.exe" total="4" errors="1" failures="1">'#13#10 +
+    '  <test-suite type="Assembly" name="T.exe" executed="true" result="Failure" success="False">'#13#10 +
+    '    <results>'#13#10 +
+    '      <test-suite type="Namespace" name="OrderTests" executed="true" result="Failure">'#13#10 +
+    '        <results>'#13#10 +
+    '          <test-suite type="Fixture" name="TOrderTests" executed="True" result="Failure">'#13#10 +
+    '            <results>'#13#10 +
+    '              <test-case name="EmptyOrderTotalIsZero" executed="True" result="Success" success="True" time="0.001" />'#13#10 +
+    '              <test-case name="TotalAddsAllLines" executed="True" result="Failure" success="False" time="0.000">'#13#10 +
+    '                <failure>'#13#10 +
+    '                  <message><![CDATA[ Expected [10] equals actual [6] two lines ]]></message>'#13#10 +
+    '                  <stack-trace><![CDATA[  ]]></stack-trace>'#13#10 +
+    '                </failure>'#13#10 +
+    '              </test-case>'#13#10 +
+    '              <test-case name="Crashes" executed="True" result="Error" success="False">'#13#10 +
+    '                <failure><message>EAccessViolation &amp; more &lt;x&gt;</message></failure>'#13#10 +
+    '              </test-case>'#13#10 +
+    '              <test-case name="Later" executed="False" result="Ignored"><reason><message>todo</message></reason></test-case>'#13#10 +
+    '            </results>'#13#10 +
+    '          </test-suite>'#13#10 +
+    '        </results>'#13#10 +
+    '      </test-suite>'#13#10 +
+    '    </results>'#13#10 +
+    '  </test-suite>'#13#10 +
+    '</test-results>';
+  Console =
+    'DUnitX - [OrdersTests.exe] - Starting Tests.'#13#10#13#10'...F..'#13#10#13#10 +
+    'Tests Found   : 3'#13#10'Tests Failed  : 1'#13#10#13#10'Failing Tests'#13#10#13#10 +
+    '  OrderTests.TOrderTests.TotalAddsAllLines'#13#10'  Message: Expected [10] equals actual [6] two lines'#13#10#13#10;
+var
+  C: TArray<TTestCaseResult>;
+begin
+  C := ParseNUnitXml(Xml);
+  Expect(Length(C) = 4, Format('%d test cases', [Length(C)]));
+  Expect((C[0].Status = tsPassed) and (C[0].FullName = 'OrderTests.TOrderTests.EmptyOrderTotalIsZero'), 'passed case');
+  Expect((C[1].Status = tsFailed) and (C[1].Message = 'Expected [10] equals actual [6] two lines') and
+    (Trim(C[1].StackTrace) = ''), 'failed case: ' + C[1].Message);
+  Expect((C[2].Status = tsError) and (C[2].Message = 'EAccessViolation & more <x>'), 'error case: ' + C[2].Message);
+  Expect(C[3].Status = tsIgnored, 'ignored case');
+  C := ParseDUnitXConsole(Console);
+  Expect((Length(C) = 1) and (C[0].Fixture = 'TOrderTests') and (C[0].Name = 'TotalAddsAllLines') and
+    (C[0].Namespace = 'OrderTests') and (C[0].Message = 'Expected [10] equals actual [6] two lines'), 'console failures');
+  Expect(IsTestProjectSource('uses DUnitX.TestFramework, X;') and not IsTestProjectSource('uses Vcl.Forms;'),
+    'test project detection');
+  Writeln('TEST RUNNER OK');
+end;
+
+function Src(const FileName, Text: string): TMapSource;
+begin
+  Result.FileName := FileName;
+  Result.Text := Text;
+  Result.FormKind := '';
+end;
+
+procedure ProjectMapSelfTest;
+var
+  Map: TProjectMap;
+  I: Integer;
+begin
+  Map := BuildProjectMap([
+    Src('P.dpr', 'program P; uses A in ''A.pas'', B, C; begin end.'),
+    Src('A.pas', 'unit A; interface uses System.SysUtils, B; implementation end.'),
+    Src('B.pas', 'unit B; interface implementation uses A, C; end.'),
+    Src('C.pas', 'unit C; interface type T = class end; implementation end.')]);
+  Expect(Length(Map.Units) = 4, 'four units');
+  I := Map.IndexOf('A');
+  Expect((Length(Map.Units[I].IntfUses) = 1) and (Map.Units[I].ExternalUses = 1), 'A uses B and SysUtils');
+  Expect((Length(Map.Cycles) = 1) and (Length(Map.Cycles[0]) = 2) and (Map.Units[I].Cycle = 0), 'A <-> B cycle');
+  I := Map.IndexOf('C');
+  Expect((Map.Units[I].Cycle = -1) and (Length(Map.Units[I].UsedBy) = 2) and (Map.Units[I].Types = 1),
+    'C used by P and B, not in the cycle');
+  Expect(Map.SummaryText(5).Contains('A <-> B'), 'summary lists the cycle');
+  Writeln('PROJECT MAP OK');
+end;
+
+procedure DbInfoSelfTest;
+const
+  Dfm =
+    'object DataOrders: TDataOrders'#13#10 +
+    '  object Connection: TFDConnection'#13#10 +
+    '    Params.Strings = ('#13#10 +
+    '      ''Database=orders.db'''#13#10 +
+    '      ''User_Name=sysdba'''#13#10 +
+    '      ''Password=mast''''erkey'''#13#10 +
+    '      ''DriverID=FB'')'#13#10 +
+    '    LoginPrompt = False'#13#10 +
+    '  end'#13#10 +
+    '  object Query1: TFDQuery'#13#10 +
+    '    Connection = Connection'#13#10 +
+    '  end'#13#10 +
+    'end'#13#10;
+var
+  C: TArray<TDfmConnection>;
+  Why: string;
+begin
+  C := FindDfmConnections(Dfm);
+  Expect((Length(C) = 1) and (C[0].Form = 'DataOrders') and (C[0].Name = 'Connection') and
+    (Length(C[0].Params) = 4) and (C[0].Param('Password') = 'mast''erkey') and (C[0].Param('DriverID') = 'FB'),
+    'DFM connection');
+  Expect(C[0].SafeParams[2] = 'Password=***', 'password masked');
+  Expect(IsReadOnlySql('select * from orders where status = ''delete'' -- update', Why), 'select with words in literals');
+  Expect(IsReadOnlySql('  WITH t AS (SELECT 1 AS x) SELECT x FROM t;', Why), 'with select');
+  Expect(IsReadOnlySql('select created_at, last_update from t order by id desc', Why), 'column names that contain keywords');
+  Expect(not IsReadOnlySql('delete from orders', Why), 'delete refused');
+  Expect(not IsReadOnlySql('with x as (select 1) delete from orders', Why), 'cte delete refused');
+  Expect(not IsReadOnlySql('select 1; drop table orders', Why), 'two statements refused');
+  Expect(not IsReadOnlySql('select * into backup from orders', Why), 'select into refused');
+  Expect(not IsReadOnlySql('pragma journal_mode = off', Why) and IsReadOnlySql('pragma table_info(x)', Why) = False,
+    'writing pragma refused');
+  Writeln('DB INFO OK');
+end;
+
+procedure ModernizeSelfTest;
+const
+  Legacy =
+    'unit Legacy;'#13#10 +
+    'interface'#13#10 +
+    'uses Windows, DBTables, SqlExpr;'#13#10 +
+    'implementation'#13#10 +
+    'procedure P(Wnd: HWND; S: string);'#13#10 +
+    'var Buf: array[0..9] of Char; A: AnsiString;'#13#10 +
+    'begin'#13#10 +
+    '  SetWindowLong(Wnd, GWL_USERDATA, Integer(Pointer(Self)));'#13#10 +
+    '  Move(S[1], Buf, Length(S));'#13#10 +
+    '  // Integer(Pointer(X)) in a comment does not count'#13#10 +
+    '  Writeln(''TTable in a string does not count'');'#13#10 +
+    '  if S[1] in [''a''..''z''] then;'#13#10 +
+    'end;'#13#10 +
+    'end.'#13#10;
+  LegacyDfm =
+    'object Form1: TForm1'#13#10 +
+    '  object Table1: TTable'#13#10 +
+    '    TableName = ''TQuery'''#13#10 +
+    '  end'#13#10 +
+    'end'#13#10;
+  Log =
+    '--------------------------------2026/10/3 12:00:00--------------------------------'#13#10 +
+    'A memory block has been leaked. The size is: 20'#13#10#13#10 +
+    'This block was allocated by thread 0x1A2C, and the stack trace (return addresses) at the time was:'#13#10 +
+    '406A2B [System.pas][System][@GetMem][4843]'#13#10 +
+    '40A1F0 [System.pas][System][TObject.NewInstance][18000]'#13#10 +
+    '4C1234 [OrderLogic.pas][OrderLogic][TOrder.Create][38]'#13#10 +
+    '4C2234 [MainForm.pas][MainForm][TFormMain.FormCreate][31]'#13#10#13#10 +
+    'The block is currently used for an object of class: TOrder'#13#10#13#10 +
+    'Current memory dump of 256 bytes starting at pointer address 7FF8A0:'#13#10 +
+    '--------------------------------2026/10/3 12:00:00--------------------------------'#13#10 +
+    'A memory block has been leaked. The size is: 20'#13#10#13#10 +
+    'This block was allocated by thread 0x1A2C, and the stack trace (return addresses) at the time was:'#13#10 +
+    '4C1234 [OrderLogic.pas][OrderLogic][TOrder.Create][38]'#13#10#13#10 +
+    'The block is currently used for an object of class: TOrder'#13#10 +
+    '--------------------------------2026/10/3 12:00:00--------------------------------'#13#10 +
+    'A memory block has been leaked. The size is: 36'#13#10#13#10 +
+    'The block is currently used for an object of class: UnicodeString'#13#10;
+var
+  Sources: TArray<TModernSource>;
+  S: TModernSource;
+  Summary: TArray<TRuleSummary>;
+  F: TArray<TFinding>;
+  Leaks: TArray<TLeak>;
+
+  function Count(const Rule: string): Integer;
+  var
+    R: TRuleSummary;
+  begin
+    Result := 0;
+    for R in Summary do
+      if R.Rule = Rule then
+        Exit(R.Count);
+  end;
+
+begin
+  S.FileName := 'C:pLegacy.pas';
+  S.Text := Legacy;
+  Sources := [S];
+  S.FileName := 'C:pLegacy.dfm';
+  S.Text := LegacyDfm;
+  Sources := Sources + [S];
+  F := AnalyzeSources(Sources, 'win64', Summary);
+  Expect((Count('window-long') = 1) and (Count('pointer-to-int-cast') = 1), 'win64 findings');
+  Expect(F[0].Line = 8, 'finding line');
+  F := AnalyzeSources(Sources, 'unicode', Summary);
+  Expect((Count('ansi-types') = 1) and (Count('byte-count-from-length') = 1) and (Count('char-set-in') = 1),
+    'unicode findings');
+  F := AnalyzeSources(Sources, 'bde', Summary);
+  Expect((Count('bde-units') = 1) and (Count('dbx-units') = 1) and (Count('bde-components') = 1),
+    Format('bde findings %d/%d/%d', [Count('bde-units'), Count('dbx-units'), Count('bde-components')]));
+  Expect(FindingsText(Summary, F, 5, 'C:p').Contains('Legacy.dfm:2'), 'the form is reported');
+  Leaks := ParseFastMMLog(Log);
+  Expect((Length(Leaks) = 2) and (Leaks[0].ClassName = 'TOrder') and (Leaks[0].Count = 2) and
+    (Leaks[0].TotalBytes = 40) and Leaks[0].Stack[0].Contains('TOrder.Create'), 'FastMM leaks grouped');
+  Writeln('MODERNIZE OK');
+end;
+
+procedure TimelineSelfTest;
+var
+  Dir, A, B: string;
+  TL: TTimeline;
+  Plan: TArray<TRestore>;
+  Add, Rem: Integer;
+
+  function Hook(const Event, Extra: string): string;
+  begin
+    Result := '{"session_id":"s1","cwd":' + TJSONString.Create(Dir).ToJSON + ',"hook_event_name":"' + Event + '"' +
+      Extra + '}';
+  end;
+
+  function Edit(const FileName: string): string;
+  begin
+    Result := Hook('PreToolUse', ',"tool_name":"Edit","tool_input":{"file_path":' +
+      TJSONString.Create(FileName).ToJSON + '}');
+  end;
+
+begin
+  Dir := TPath.Combine(TPath.GetTempPath, 'claude-timeline-test');
+  TDirectory.CreateDirectory(Dir);
+  A := TPath.Combine(Dir, 'A.pas');
+  B := TPath.Combine(Dir, 'B.pas');
+  System.SysUtils.DeleteFile(B);
+  TFile.WriteAllText(A, 'v1'#13#10);
+  TL := TTimeline.Create;
+  try
+    // Turn 1 edits A twice: the snapshot is from before the first edit.
+    TL.HandleHook(Hook('UserPromptSubmit', ',"prompt":"rename things"'));
+    TL.HandleHook(Edit(A));
+    TFile.WriteAllText(A, 'v2'#13#10);
+    TL.HandleHook(Edit(A));
+    TFile.WriteAllText(A, 'v2'#13#10'more'#13#10);
+    TL.HandleHook(Hook('Stop', ''));
+    // Turn 2 edits A again and creates B (a relative path, from the session folder).
+    TL.HandleHook(Hook('UserPromptSubmit', ',"prompt":"add B"'));
+    TL.HandleHook(Edit(A));
+    TFile.WriteAllText(A, 'v3'#13#10);
+    TL.HandleHook(Hook('PreToolUse', ',"tool_name":"Write","tool_input":{"file_path":"B.pas"}'));
+    TFile.WriteAllText(B, 'new'#13#10);
+    TL.HandleHook(Hook('Read', ''));
+    TL.HandleHook(Hook('Stop', ''));
+    Expect((TL.Count = 2) and (TL.Turn(0).Prompt = 'rename things') and (TL.Turn(0).Files.Count = 1) and
+      (TL.Turn(1).Files.Count = 2) and not TL.Turn(1).Running, 'turns and files');
+    Expect(TEncoding.ANSI.GetString(TL.Turn(0).Files[0].Before) = 'v1'#13#10, 'turn 1 keeps the first version');
+    LineChanges(TL.Turn(0).Files[0].Before, TL.Turn(0).Files[0].After, Add, Rem);
+    Expect((Add = 2) and (Rem = 1), Format('turn 1 line changes +%d -%d', [Add, Rem]));
+    Plan := TL.RewindPlan(1);
+    Expect((Length(Plan) = 2) and (TEncoding.ANSI.GetString(Plan[0].Bytes) = 'v2'#13#10'more'#13#10) and
+      Plan[1].Delete and SameText(Plan[1].FileName, B), 'rewind to before turn 2');
+    Plan := TL.RewindPlan(0);
+    Expect((Length(Plan) = 2) and (TEncoding.ANSI.GetString(Plan[0].Bytes) = 'v1'#13#10), 'rewind to before turn 1');
+    TL.DropFrom(1);
+    Expect(TL.Count = 1, 'later turns dropped');
+  finally
+    TL.Free;
+    TDirectory.Delete(Dir, True);
+  end;
+  Writeln('TIMELINE OK');
 end;
 
 var
@@ -361,6 +761,12 @@ begin
     BuildParserSelfTest;
     TextSyncSelfTest;
     ComponentPropsSelfTest;
+    PascalIndexSelfTest;
+    TestRunnerSelfTest;
+    ProjectMapSelfTest;
+    DbInfoSelfTest;
+    ModernizeSelfTest;
+    TimelineSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;
@@ -368,6 +774,7 @@ begin
     end;
     LogProc := procedure(const Msg: string) begin Writeln('LOG ', Msg); end;
     Mcp := TMcpServer.Create(TFakeBackend.Create(GetCurrentDir));
+    Mcp.OnHook := procedure(Json: string) begin Writeln('HOOK ', Json); Flush(Output); end;
     Mcp.Start;
     ReadTextFileAutoEnc(Mcp.LockFile, LockText);
     Token := (TJSONObject.ParseJSONValue(LockText) as TJSONObject).GetValue<string>('authToken');
@@ -379,6 +786,7 @@ begin
     while Now < Deadline do
     begin
       CheckSynchronize(50);
+      PumpMessages;
       if FileExists(ChangeFileExt(ParamStr(0), '.stop')) then
         Break;
     end;
