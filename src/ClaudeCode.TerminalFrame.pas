@@ -60,6 +60,7 @@ type
     FWorkDir: string;       // folder the session runs (or will run) in
     FCommand: string;
     FTitle: string;         // terminal title set by Claude
+    FUsage: string;         // model, context and cost from Claude Code's status line
     FProgress: Boolean;     // OSC 9;4 progress is showing
     FBusy: Boolean;         // Claude is working on a turn
     FAttention: Boolean;    // Claude asked for the user (bell / notification) since the last key
@@ -140,6 +141,8 @@ type
     function AddView(const WorkDir: string = ''): TClaudeSessionView;
     { The tab for WorkDir: an existing one, the active tab when it has no session yet, or a new one. }
     function ViewFor(const WorkDir: string): TClaudeSessionView;
+    { The status line of the sessions running in Dir (model, context, cost). }
+    procedure SetSessionUsage(const Dir, Text: string);
     procedure ActivateView(View: TClaudeSessionView);
     { The active tab. }
     procedure StartSession(const Args: string = ''; Fresh: Boolean = False);
@@ -579,6 +582,8 @@ begin
   if Detail = '' then
     Detail := FWorkDir;
   Result := Result + '   ' + Detail;
+  if FUsage <> '' then
+    Result := Result + '   ' + FUsage;
 end;
 
 function TClaudeSessionView.TabCaption: string;
@@ -769,6 +774,7 @@ begin
   FSession.OnOutput := SessionOutput;
   FSession.OnExit := SessionExit;
   FTitle := '';
+  FUsage := '';
   FBusy := False;
   FProgress := False;
   FAttention := False;
@@ -932,6 +938,23 @@ begin
   Sheet.Caption := Result.TabCaption;
   FPages.ActivePage := Sheet;
   UpdateStatus;
+end;
+
+procedure TClaudeTerminalFrame.SetSessionUsage(const Dir, Text: string);
+var
+  I: Integer;
+  V: TClaudeSessionView;
+begin
+  for I := 0 to ViewCount - 1 do
+  begin
+    V := Views[I];
+    if V.SessionRunning and SameFileName(ExcludeTrailingPathDelimiter(V.WorkDir), ExcludeTrailingPathDelimiter(Dir)) and
+       (V.FUsage <> Text) then
+    begin
+      V.FUsage := Text;
+      ViewChanged(V);
+    end;
+  end;
 end;
 
 function TClaudeTerminalFrame.ViewFor(const WorkDir: string): TClaudeSessionView;

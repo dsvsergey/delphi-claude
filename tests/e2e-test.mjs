@@ -408,6 +408,12 @@ if (want('prompts')) {
   const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'ide', `${port}.delphi-settings.json`), 'utf8'));
   check(cfg.hooks.PreToolUse[0].matcher === 'Edit|Write|MultiEdit|NotebookEdit' &&
     cfg.hooks.Stop[0].hooks[0].command.includes(`127.0.0.1:${port}/hook`), 'the hooks settings file');
+  check(cfg.statusLine?.command.includes(`127.0.0.1:${port}/statusline`), 'the status line in the settings file');
+  const sl = await fetch(`http://127.0.0.1:${port}/statusline`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ cwd: dir, model: { display_name: 'Opus' }, context_window: { used_percentage: 41.6 },
+      cost: { total_cost_usd: 0.374 } }) });
+  check((await sl.text()) === 'Opus · context 42% · $0.37', 'the status line text');
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

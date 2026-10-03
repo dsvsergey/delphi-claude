@@ -51,6 +51,7 @@ type
     procedure WriteSetting(const Name, Value: string);
     function WorkDir: string;
     function ClaudeExtraArgs: string;
+    function StatusLineReceived(Json: string): string;
     procedure FocusEditor;
     function TerminalHostInfo: TTerminalHostInfo;
     function TerminalHostKey(Key: Word; Shift: TShiftState; Execute: Boolean): Boolean;
@@ -127,6 +128,7 @@ begin
   FBackendIntf := FBackend;
   FMcp := TMcpServer.Create(FBackendIntf);
   FMcp.OnClientsChanged := ClientsChanged;
+  FMcp.OnStatusLine := StatusLineReceived;
   FMcp.OnHook :=
     procedure(Json: string)
     begin
@@ -186,6 +188,7 @@ begin
   begin
     FMcp.OnClientsChanged := nil;
     FMcp.OnHook := nil;
+    FMcp.OnStatusLine := nil;
     FMcp.Stop;
     FreeAndNil(FMcp);
   end;
@@ -285,19 +288,67 @@ begin
   end;
 end;
 
+{ True when the user configured a status line of their own (ours would replace it for the session). }
+function UserHasStatusLine(const Dir: string): Boolean;
+var
+  F, Text: string;
+begin
+  for F in [TPath.Combine(ClaudeConfigDir, 'settings.json'), TPath.Combine(Dir, '.claude\settings.json'),
+    TPath.Combine(Dir, '.claude\settings.local.json')] do
+    if FileExists(F) and ReadTextFileAutoEnc(F, Text) and (Pos('"statusLine"', Text) > 0) then
+      Exit(True);
+  Result := False;
+end;
+
 function TClaudeCodeWizard.ClaudeExtraArgs: string;
 var
   S: TClaudeSettings;
+  StatusLine: Boolean;
 begin
   S := LoadSettings;
   Result := S.CommandArgs;
-  // Hooks that report turns and file edits to the IDE (Claude Timeline).
-  if S.Timeline and FMcp.Running and (FMcp.HookSettingsFile <> '') then
+  // Hooks that report turns and file edits to the IDE (Claude Timeline), and the status line that
+  // reports the session's context and cost.
+  StatusLine := S.StatusLine and not UserHasStatusLine(WorkDir);
+  FMcp.SetClaudeSettings(S.Timeline, StatusLine);
+  if (S.Timeline or StatusLine) and FMcp.Running and (FMcp.HookSettingsFile <> '') then
     Result := Trim(Result + ' --settings "' + FMcp.HookSettingsFile + '"');
   // Registers the "delphi" MCP server (build, project, designer and debugger tools) for this session.
   // Last, because --mcp-config takes every following value that is not an option.
   if S.DelphiTools and FMcp.Running and (FMcp.McpConfigFile <> '') then
     Result := Trim(Result + ' --mcp-config "' + FMcp.McpConfigFile + '"');
+end;
+
+function TClaudeCodeWizard.StatusLineReceived(Json: string): string;
+var
+  V: TJSONValue;
+  O: TJSONObject;
+  Model, Dir: string;
+  Context, Cost: Double;
+  Parts: TArray<string>;
+begin
+  // "Opus 5.5 · context 42% · $0.37": shown by Claude Code and next to the session's state in the panel.
+  Result := '';
+  V := TJSONObject.ParseJSONValue(Json);
+  try
+    if not (V is TJSONObject) then
+      Exit;
+    O := TJSONObject(V);
+    Dir := O.GetValue<string>('workspace.current_dir', O.GetValue<string>('cwd', ''));
+    Model := O.GetValue<string>('model.display_name', '');
+    Parts := nil;
+    if Model <> '' then
+      Parts := Parts + [Model];
+    if O.TryGetValue<Double>('context_window.used_percentage', Context) then
+      Parts := Parts + [Format('context %d%%', [Round(Context)])];
+    if O.TryGetValue<Double>('cost.total_cost_usd', Cost) then
+      Parts := Parts + [Format('$%.2f', [Cost], TFormatSettings.Invariant)];
+    Result := string.Join(' ' + #$00B7 + ' ', Parts);
+    if (ClaudePanelFrame <> nil) and (Dir <> '') then
+      ClaudePanelFrame.SetSessionUsage(Dir, Result);
+  finally
+    V.Free;
+  end;
 end;
 
 { Terminal panel callbacks }
@@ -1286,6 +1337,7 @@ begin
   Result.Timeline := ReadSetting('Timeline', '1') <> '0';
   Result.InlineDiff := ReadSetting('InlineDiff', '0') <> '0';
   Result.ContinueLast := ReadSetting('ContinueLast', '1') <> '0';
+  Result.StatusLine := ReadSetting('StatusLine', '1') <> '0';
 end;
 
 procedure TClaudeCodeWizard.SaveSettings(const S: TClaudeSettings);
@@ -1303,6 +1355,7 @@ begin
   WriteSetting('Timeline', Flag[S.Timeline]);
   WriteSetting('InlineDiff', Flag[S.InlineDiff]);
   WriteSetting('ContinueLast', Flag[S.ContinueLast]);
+  WriteSetting('StatusLine', Flag[S.StatusLine]);
 end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);

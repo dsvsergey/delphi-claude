@@ -156,6 +156,10 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   check(h.status === 202 && h.text === '', 'http: /hook -> 202 without a body');
   h = await post({ hook_event_name: 'Stop' }, 'wrong', '/hook');
   check(h.status === 401, 'http: /hook needs the token');
+  h = await post({ model: { display_name: 'Opus' } }, token, '/statusline');
+  check(h.status === 200, 'http: /statusline answers');
+  h = await post({}, 'wrong', '/statusline');
+  check(h.status === 401, 'http: /statusline needs the token');
   h = await post(null, token, '/mcp', 'GET');
   check(h.status === 405, 'http: GET -> 405');
   h = await post({ jsonrpc: '2.0', id: 5, method: 'ping' }, token, '/other');
