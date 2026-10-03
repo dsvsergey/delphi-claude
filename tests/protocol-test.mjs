@@ -119,7 +119,7 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
       ...(auth ? { authorization: `Bearer ${auth}` } : {}) },
     body: method === 'POST' ? JSON.stringify(body) : undefined });
   const text = await res.text();
-  return { status: res.status, json: text ? JSON.parse(text) : null };
+  return { status: res.status, text, json: text ? JSON.parse(text) : null };
 }
 {
   let h = await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }, 'wrong');
@@ -129,12 +129,33 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   h = await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   check(h.status === 202, 'http: notification -> 202');
   h = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  const hn = h.json.result.tools.map(t => t.name);
+  const toolList = h.json.result.tools;
+  const hn = toolList.map(t => t.name);
   check(['buildProject','getProjectInfo','getFormComponents','getSelectedComponents','setComponentProperties','createComponent','deleteComponent','captureForm','getDebugState','evaluateExpression','setBreakpoint','listBreakpoints','removeBreakpoint','debugControl','getFileHistory'].every(n => hn.includes(n)) && !hn.includes('openDiff'), `http: tools/list (${hn.join(', ')})`);
   h = await post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'getProjectInfo', arguments: {} } });
   check(h.json.id === 3 && JSON.parse(h.json.result.content[0].text).project.name === 'Fake', 'http: tools/call through the main thread');
   h = await post({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'openDiff', arguments: {} } });
   check(h.json.result.isError === true, 'http: IDE-only tools are not callable');
+  // Stage 8 tools and the prompts (slash commands) of the delphi server.
+  check(['runTests','pasteDfm','setLogpoint','getLogpointHits','getUnitOutline','findSymbol','findReferences',
+    'renameSymbol','captureApp','getAppUI','appAction','getUnitDependencies','showProjectMap','listConnections',
+    'getDatabaseSchema','runQuery','analyzeModernization','getMemoryLeaks'].every(n => hn.includes(n)),
+    'http: stage 8 tools listed');
+  check(toolList.every(t => t.inputSchema && t.inputSchema.type === 'object' && t.description.length > 20),
+    'http: every tool has a schema and a description');
+  h = await post({ jsonrpc: '2.0', id: 6, method: 'prompts/list' });
+  const pn = h.json.result.prompts.map(p => p.name);
+  check(['make-tests-pass','hunt-bug','screenshot-to-form','crud-form','modernize','explain-architecture'].every(n => pn.includes(n)),
+    `http: prompts/list (${pn.join(', ')})`);
+  h = await post({ jsonrpc: '2.0', id: 7, method: 'prompts/get', params: { name: 'modernize', arguments: { scenario: 'win64' } } });
+  check(h.json.result.messages[0].content.text.includes('analyzeModernization'), 'http: prompts/get renders arguments');
+  h = await post({ jsonrpc: '2.0', id: 8, method: 'prompts/get', params: { name: 'nope' } });
+  check(h.json.error && h.json.error.code === -32602, 'http: unknown prompt -> error');
+  // Claude Code hooks (Claude Timeline): answered at once, without a body.
+  h = await post({ session_id: 's', hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, token, '/hook');
+  check(h.status === 202 && h.text === '', 'http: /hook -> 202 without a body');
+  h = await post({ hook_event_name: 'Stop' }, 'wrong', '/hook');
+  check(h.status === 401, 'http: /hook needs the token');
   h = await post(null, token, '/mcp', 'GET');
   check(h.status === 405, 'http: GET -> 405');
   h = await post({ jsonrpc: '2.0', id: 5, method: 'ping' }, token, '/other');
