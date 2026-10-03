@@ -261,12 +261,9 @@ procedure TEditorSync.ApplyDiskChange(const FileName: string);
 var
   Buffer: IOTAEditBuffer;
   Module: IOTAModule;
-  DiskBytes, OldBytes, NewBytes: TBytes;
+  DiskBytes, OldBytes: TBytes;
   OldText, NewText: string;
   Restored, Unresolved: Integer;
-  Span: TSpan;
-  Writer: IOTAEditWriter;
-  Chunk: UTF8String;
 begin
   Buffer := FindEditBuffer(FileName);
   Module := (BorlandIDEServices as IOTAModuleServices).FindModule(FileName);
@@ -284,27 +281,13 @@ begin
   OldBytes := ReadBufferBytes(Buffer, 0, MaxInt);
   OldText := Utf8BytesToString(OldBytes);
   NewText := RestoreLostChars(OldText, DecodeFileBytes(DiskBytes), Restored, Unresolved);
+  // In the buffer's own line breaks: the IDE saving an LF file is not a change.
   NewText := NormalizeToCrLf(NewText);
-  NewBytes := TEncoding.UTF8.GetBytes(NewText);
-  Span := ChangedSpanUtf8(OldBytes, NewBytes);
-  if Span.IsEmpty then
-    Exit; // e.g. the IDE saved the file itself; reloading would only drop the undo history
-
-  Writer := Buffer.CreateUndoableWriter;
-  try
-    Writer.CopyTo(Span.Start);
-    Writer.DeleteTo(Span.Start + Span.OldLen);
-    if Span.NewLen > 0 then
-    begin
-      SetLength(Chunk, Span.NewLen);
-      Move(NewBytes[Span.Start], Chunk[1], Span.NewLen);
-      Writer.Insert(Chunk);
-    end;
-  finally
-    Writer := nil; // the edit is committed when the writer is released
-  end;
-  if Buffer.TopView <> nil then
-    Buffer.TopView.Paint;
+  if (Pos(#13#10, OldText) = 0) and (Pos(#10, OldText) > 0) then
+    NewText := StringReplace(NewText, #13#10, #10, [rfReplaceAll]);
+  // Nothing changed: e.g. the IDE saved the file itself; reloading would only drop the undo history.
+  if not ReplaceBufferText(Buffer, NewText) then
+    Exit;
   Module.Save(False, True);
 
   if Restored > 0 then
