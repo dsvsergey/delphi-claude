@@ -751,6 +751,36 @@ begin
   Writeln('TIMELINE OK');
 end;
 
+procedure ConversationSelfTest;
+var
+  Dir, Old: string;
+begin
+  // --continue only where Claude Code has a conversation for the folder.
+  Dir := TPath.Combine(TPath.GetTempPath, 'cc-conv-' + IntToStr(GetTickCount));
+  Old := GetEnvironmentVariable('CLAUDE_CONFIG_DIR');
+  SetEnvironmentVariable('CLAUDE_CONFIG_DIR', PChar(Dir));
+  try
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--nprojects-delphi-claude'));
+    TFile.WriteAllText(TPath.Combine(Dir, 'projects\D--nprojects-delphi-claude\s.jsonl'),
+      '{"type":"user","entrypoint":"cli","cwd":"x"}'#10);
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--empty'));
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--sdk'));
+    TFile.WriteAllText(TPath.Combine(Dir, 'projects\D--sdk\p.jsonl'), '{"type":"user","entrypoint":"sdk-ts"}'#10);
+    Expect(HasClaudeConversation('D:\nprojects\delphi-claude'), 'conversation of a folder');
+    Expect(HasClaudeConversation('D:\nprojects\delphi-claude\'), 'trailing backslash');
+    Expect(not HasClaudeConversation('D:\nprojects\delphi'), 'other folder');
+    Expect(not HasClaudeConversation('D:\empty'), 'folder without conversations');
+    Expect(not HasClaudeConversation('D:\sdk'), 'claude -p sessions do not count');
+  finally
+    if Old = '' then
+      SetEnvironmentVariable('CLAUDE_CONFIG_DIR', nil)
+    else
+      SetEnvironmentVariable('CLAUDE_CONFIG_DIR', PChar(Old));
+    TDirectory.Delete(Dir, True);
+  end;
+  Writeln('CONVERSATION OK');
+end;
+
 var
   Mcp: TMcpServer;
   Deadline: TDateTime;
@@ -767,6 +797,7 @@ begin
     DbInfoSelfTest;
     ModernizeSelfTest;
     TimelineSelfTest;
+    ConversationSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;

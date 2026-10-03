@@ -102,13 +102,8 @@ const
   DEFAULT_PROTOCOL = '2025-03-26';
 
 function ClaudeIdeLockDir: string;
-var
-  Base: string;
 begin
-  Base := GetEnvironmentVariable('CLAUDE_CONFIG_DIR');
-  if Base = '' then
-    Base := TPath.Combine(GetEnvironmentVariable('USERPROFILE'), '.claude');
-  Result := TPath.Combine(Base, 'ide');
+  Result := TPath.Combine(ClaudeConfigDir, 'ide');
 end;
 
 { TToolResult }

@@ -308,6 +308,7 @@ begin
   Result.WorkDir := WorkDir;
   Result.Command := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
   Result.ExtraArgs := ClaudeExtraArgs;
+  Result.ContinueLast := ReadSetting('ContinueLast', '1') <> '0';
   Result.Background := clWindow;
   if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
     Result.Background := Theming.StyleServices.GetSystemColor(clWindow);
@@ -1113,6 +1114,7 @@ begin
   Result.SubmitRequests := ReadSetting('SubmitRequests', '1') <> '0';
   Result.Timeline := ReadSetting('Timeline', '1') <> '0';
   Result.InlineDiff := ReadSetting('InlineDiff', '0') <> '0';
+  Result.ContinueLast := ReadSetting('ContinueLast', '1') <> '0';
 end;
 
 procedure TClaudeCodeWizard.SaveSettings(const S: TClaudeSettings);
@@ -1129,6 +1131,7 @@ begin
   WriteSetting('SubmitRequests', Flag[S.SubmitRequests]);
   WriteSetting('Timeline', Flag[S.Timeline]);
   WriteSetting('InlineDiff', Flag[S.InlineDiff]);
+  WriteSetting('ContinueLast', Flag[S.ContinueLast]);
 end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);

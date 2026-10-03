@@ -25,6 +25,7 @@ type
     Background: TColor; // IDE window colour, decides light/dark terminal theme
     FontName: string;   // code editor font; empty = default
     FontSize: Integer;  // points
+    ContinueLast: Boolean; // sessions not started with New Session continue the folder's last conversation
   end;
 
   TTerminalHostInfoFunc = reference to function: TTerminalHostInfo;
@@ -49,6 +50,9 @@ type
     FRows: Integer;
     FStartPending: Boolean;
     FPendingArgs: string;
+    FPendingFresh: Boolean;
+    FAutoContinued: Boolean; // started with --continue on our own (not by the user's Continue)
+    FStartTick: UInt64;
     FBacklog: TBytes;
     FIdleHintShown: Boolean;
     FLinks: TStringList;
@@ -71,7 +75,7 @@ type
     procedure SendBytes(const Data: TBytes);
     procedure WriteLocal(const S: string);
     procedure SendConfig;
-    procedure DoStart(const Args: string);
+    procedure DoStart(const Args: string; Fresh: Boolean);
     procedure ShowIdleHint;
     procedure UpdateActivity;
     procedure SetAttention(Value: Boolean);
@@ -84,7 +88,8 @@ type
   public
     constructor CreateView(AFrame: TClaudeTerminalFrame; const AWorkDir: string);
     destructor Destroy; override;
-    procedure StartSession(const Args: string = '');
+    { Fresh: a new conversation even when the host continues the last one by default. }
+    procedure StartSession(const Args: string = ''; Fresh: Boolean = False);
     procedure StopSession;
     procedure FocusTerminal;
     function SessionRunning: Boolean;
@@ -137,7 +142,7 @@ type
     function ViewFor(const WorkDir: string): TClaudeSessionView;
     procedure ActivateView(View: TClaudeSessionView);
     { The active tab. }
-    procedure StartSession(const Args: string = '');
+    procedure StartSession(const Args: string = ''; Fresh: Boolean = False);
     procedure StopSession;
     procedure FocusTerminal;
     function SessionRunning: Boolean;
@@ -381,7 +386,7 @@ begin
       if SessionRunning then
         FSession.WriteText(S)
       else if Pos(#13, S) > 0 then
-        DoStart('');
+        DoStart('', False);
     end
     else if T = 'resize' then
     begin
@@ -455,7 +460,7 @@ begin
   if FStartPending then
   begin
     FStartPending := False;
-    DoStart(FPendingArgs);
+    DoStart(FPendingArgs, FPendingFresh);
   end
   else if SessionRunning then
   begin
@@ -699,6 +704,13 @@ end;
 
 procedure TClaudeSessionView.SessionExit(ExitCode: Cardinal);
 begin
+  // Our own --continue found nothing to continue after all: start a new conversation instead.
+  if FAutoContinued and (ExitCode <> 0) and (GetTickCount64 - FStartTick < 10000) then
+  begin
+    FAutoContinued := False;
+    DoStart('', True);
+    Exit;
+  end;
   FBusy := False;
   FProgress := False;
   FAttention := False;
@@ -712,7 +724,7 @@ begin
   Result := (FSession <> nil) and FSession.Running;
 end;
 
-procedure TClaudeSessionView.StartSession(const Args: string);
+procedure TClaudeSessionView.StartSession(const Args: string; Fresh: Boolean);
 begin
   if FWeb = nil then
     BuildUI;
@@ -720,15 +732,16 @@ begin
   begin
     FStartPending := True;
     FPendingArgs := Args;
+    FPendingFresh := Fresh;
     Exit;
   end;
-  DoStart(Args);
+  DoStart(Args, Fresh);
 end;
 
-procedure TClaudeSessionView.DoStart(const Args: string);
+procedure TClaudeSessionView.DoStart(const Args: string; Fresh: Boolean);
 var
   Info: TTerminalHostInfo;
-  Cmd: string;
+  Cmd, StartArgs: string;
 begin
   if not Assigned(TClaudeTerminalFrame.HostInfo) then
     Exit;
@@ -740,11 +753,17 @@ begin
     WriteLocal(#27'[31mThe Claude Code IDE server is not running (see Tools > Claude Code > Status and Log).'#27'[0m'#13#10);
     Exit;
   end;
-  Cmd := Trim(Info.Command + ' ' + Info.ExtraArgs + ' ' + Args);
   if FWorkDir = '' then
     FWorkDir := Info.WorkDir;
   if (FWorkDir = '') or not DirectoryExists(FWorkDir) then
     FWorkDir := GetEnvironmentVariable('USERPROFILE');
+  // Opening the panel picks up the folder's last conversation (if there is one to continue).
+  StartArgs := Args;
+  if (StartArgs = '') and not Fresh and Info.ContinueLast and HasClaudeConversation(FWorkDir) then
+    StartArgs := '--continue';
+  FAutoContinued := StartArgs <> Args;
+  FStartTick := GetTickCount64;
+  Cmd := Trim(Info.Command + ' ' + Info.ExtraArgs + ' ' + StartArgs);
   FCommand := Cmd;
   FSession := TConPtySession.Create;
   FSession.OnOutput := SessionOutput;
@@ -1064,11 +1083,11 @@ begin
   FocusTerminal;
 end;
 
-procedure TClaudeTerminalFrame.StartSession(const Args: string);
+procedure TClaudeTerminalFrame.StartSession(const Args: string; Fresh: Boolean);
 begin
   if ActiveView = nil then
     AddView;
-  ActiveView.StartSession(Args);
+  ActiveView.StartSession(Args, Fresh);
 end;
 
 procedure TClaudeTerminalFrame.StopSession;
@@ -1127,7 +1146,7 @@ end;
 
 procedure TClaudeTerminalFrame.NewClick(Sender: TObject);
 begin
-  StartSession('');
+  StartSession('', True);
 end;
 
 procedure TClaudeTerminalFrame.ContinueClick(Sender: TObject);
