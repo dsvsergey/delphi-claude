@@ -151,6 +151,7 @@ begin
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
+  TClaudeTerminalFrame.DropSource := ProjectManagerSelection;
   RegisterClaudePanel;
   ProjectMapAsk :=
     procedure(UnitName, FileName: string)
@@ -170,6 +171,7 @@ begin
   UnregisterClaudePanel; // stops the terminal session
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
+  TClaudeTerminalFrame.DropSource := nil;
   DestroyAllDiffForms;
   DestroyProjectMapWindow;
   DestroyTimelineWindow;
@@ -1031,13 +1033,7 @@ begin
   if SessionFrame = nil then
     Exit;
   if not ChooseModernization(Scenario,
-    procedure(F: TForm)
-    var
-      Theming: IOTAIDEThemingServices;
-    begin
-      if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
-        Theming.ApplyTheme(F);
-    end) then
+    ThemeIdeForm) then
     Exit;
   // Pasted, not submitted: the user can add constraints (keep Win32, which units first...).
   SendToClaude(PromptText('modernize', 'scenario', Scenario), False);
@@ -1046,16 +1042,7 @@ end;
 procedure TClaudeCodeWizard.TimelineExecute(Sender: TObject);
 begin
   ShowTimeline(FBackend.Timeline, LoadSettings.Timeline,
-    procedure(F: TForm)
-    var
-      Theming: IOTAIDEThemingServices;
-    begin
-      if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
-      begin
-        Theming.RegisterFormClass(TCustomFormClass(F.ClassType));
-        Theming.ApplyTheme(F);
-      end;
-    end);
+    ThemeIdeForm);
 end;
 
 procedure TClaudeCodeWizard.ExplainStopExecute(Sender: TObject);
@@ -1150,13 +1137,7 @@ var
 begin
   S := LoadSettings;
   if EditClaudeSettings(S,
-    procedure(F: TForm)
-    var
-      Theming: IOTAIDEThemingServices;
-    begin
-      if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
-        Theming.ApplyTheme(F);
-    end) then
+    ThemeIdeForm) then
   begin
     SaveSettings(S);
     FBackend.Sync.Enabled := S.SyncEditor;

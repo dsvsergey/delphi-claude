@@ -15,6 +15,10 @@ implementation
 uses
   Vcl.Controls, Vcl.StdCtrls, Vcl.ExtCtrls;
 
+type
+  { Its own class: the IDE themes registered form classes only (registering TForm would theme every plain form). }
+  TModernizeDialog = class(TForm);
+
 const
   Scenarios: array[0..4] of string = ('win64', 'unicode', 'bde', 'warnings', 'leaks');
   Captions: array[0..4] of string = (
@@ -33,7 +37,7 @@ var
   I: Integer;
 begin
   Scenario := '';
-  F := TForm.CreateNew(nil);
+  F := TModernizeDialog.CreateNew(nil);
   try
     F.Caption := 'Modernize Project with Claude';
     F.BorderStyle := bsDialog;

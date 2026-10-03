@@ -39,6 +39,10 @@ type
     property OnFixBuildErrors: TNotifyEvent read FOnFixBuildErrors write FOnFixBuildErrors;
   end;
 
+{ The node selected in the Project Manager as a path for @-mentions (a project stands for its folder);
+  empty when nothing usable is selected. }
+function ProjectManagerSelection: TArray<string>;
+
 const
   // Editor commands; the wizard maps them to request templates.
   ecExplain = 'explain';
@@ -213,6 +217,28 @@ end;
 function TAddToContextMenu.PostExecute(const MenuContextList: IInterfaceList): Boolean;
 begin
   Result := True;
+end;
+
+function ProjectManagerSelection: TArray<string>;
+var
+  PM: IOTAProjectManager;
+  Project: IOTAProject;
+  Ident: string;
+begin
+  Result := nil;
+  if not Supports(BorlandIDEServices, IOTAProjectManager, PM) then
+    Exit;
+  Ident := '';
+  Project := PM.GetCurrentSelection(Ident);
+  if (Ident <> '') and (FileExists(Ident) or DirectoryExists(Ident)) then
+  begin
+    if SameText(ExtractFileExt(Ident), '.dproj') or SameText(ExtractFileExt(Ident), '.groupproj') then
+      Result := [ExtractFilePath(Ident)]
+    else
+      Result := [Ident];
+  end
+  else if Project <> nil then
+    Result := [ExtractFilePath(Project.FileName)];
 end;
 
 { TProjectMenuCreator }

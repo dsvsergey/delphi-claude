@@ -75,8 +75,10 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
     const files = e.dataTransfer && e.dataTransfer.files;
     if (files && files.length && host && host.postMessageWithAdditionalObjects)
       host.postMessageWithAdditionalObjects(JSON.stringify({ t: 'drop' }), files);
-    else if (e.dataTransfer && e.dataTransfer.getData('text'))
-      term.paste(e.dataTransfer.getData('text'));
+    else if (e.dataTransfer)
+      // No files: Project Manager nodes (the host knows which) or text.
+      post({ t: 'dropOther', text: e.dataTransfer.getData('text') || '',
+        types: Array.from(e.dataTransfer.types || []).join(', ') });
   });
 
   // Session state for the host: the title (Claude animates a spinner in it while working),

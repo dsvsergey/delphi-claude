@@ -49,6 +49,7 @@ var
   Map: TProjectMap;
   G: IOTAProjectGroup;
   Title: string;
+  Theming: IOTAIDEThemingServices;
 begin
   Map := BuildProjectMap(ProjectMapSources(''));
   if Length(Map.Units) = 0 then
@@ -59,6 +60,9 @@ begin
     Title := ExtractFileName(G.FileName);
   if Instance = nil then
   begin
+    // Registered before the window exists: the theme's title bar is set up when it is created.
+    if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
+      Theming.RegisterFormClass(TProjectMapForm);
     Instance := TProjectMapForm.CreateMap(Application);
     Instance.OnOpen :=
       procedure(FileName: string)
@@ -71,6 +75,8 @@ begin
         if Assigned(ProjectMapAsk) then
           ProjectMapAsk(UnitName, FileName);
       end;
+    if (Theming <> nil) and Theming.IDEThemingEnabled then
+      Theming.ApplyTheme(Instance);
   end;
   Instance.ShowMap(Map, Title, Dark);
   Result := True;

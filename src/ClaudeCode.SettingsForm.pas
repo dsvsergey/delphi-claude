@@ -31,6 +31,10 @@ implementation
 uses
   Vcl.Controls, Vcl.StdCtrls, Vcl.ExtCtrls;
 
+type
+  { Its own class: the IDE themes registered form classes only (registering TForm would theme every plain form). }
+  TClaudeSettingsDialog = class(TForm);
+
 function Quote(const S: string): string;
 begin
   if S.Contains(' ') then
@@ -107,7 +111,7 @@ var
   end;
 
 begin
-  F := TForm.CreateNew(nil);
+  F := TClaudeSettingsDialog.CreateNew(nil);
   try
     F.Caption := 'Claude Code Settings';
     F.BorderStyle := bsDialog;
