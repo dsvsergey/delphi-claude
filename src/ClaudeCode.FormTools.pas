@@ -20,6 +20,8 @@ procedure ToolPasteDfm(Args: TJSONObject; const Done: TToolDone);
 
 { True when the form designer is the active IDE view. }
 function DesignerIsActive: Boolean;
+{ The form of the current module (its name and unit); False when the current module has none. }
+function CurrentFormInfo(out FormName, FileName: string): Boolean;
 { A request describing the components selected in the active designer, or '' when none. }
 function SelectedComponentsPrompt: string;
 
@@ -158,6 +160,20 @@ begin
           Exit(True);
     end;
   Err := 'No form named ' + Spec;
+end;
+
+function CurrentFormInfo(out FormName, FileName: string): Boolean;
+var
+  Ctx: TFormContext;
+begin
+  FormName := '';
+  FileName := '';
+  Result := MakeContext(ModuleServices.CurrentModule, Ctx);
+  if Result then
+  begin
+    FormName := Ctx.Root.Name;
+    FileName := Ctx.FileName;
+  end;
 end;
 
 { TFormContext }

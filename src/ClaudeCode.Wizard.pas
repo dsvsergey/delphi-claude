@@ -12,7 +12,7 @@ implementation
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Win.Registry,
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
-  Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, ToolsAPI,
+  Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, Vcl.Clipbrd, Vcl.Imaging.pngimage, System.UITypes, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
@@ -75,6 +75,7 @@ type
     procedure ProjectMapExecute(Sender: TObject);
     procedure ModernizeExecute(Sender: TObject);
     procedure ReviewChangesExecute(Sender: TObject);
+    procedure FormFromPictureExecute(Sender: TObject);
     procedure CommitMessageExecute(Sender: TObject);
     function InGitRepository: Boolean;
     procedure TimelineExecute(Sender: TObject);
@@ -451,6 +452,7 @@ begin
   AddItem(NewAction('ClaudeCodeClaudeMdAction', 'Create CLAUDE.md for Project...', '', ClaudeMdExecute));
   AddItem(NewAction('ClaudeCodeProjectMapAction', 'Project Map...', '', ProjectMapExecute));
   AddItem(NewAction('ClaudeCodeModernizeAction', 'Modernize Project with Claude...', '', ModernizeExecute));
+  AddItem(NewAction('ClaudeCodeFormPictureAction', 'Design Form from Picture with Claude...', '', FormFromPictureExecute));
   AddItem(NewAction('ClaudeCodeTimelineAction', 'Claude Timeline...', '', TimelineExecute));
   AddItem(NewAction('ClaudeCodeReviewAction', 'Review Changes with Claude', '', ReviewChangesExecute));
   AddItem(NewAction('ClaudeCodeCommitMsgAction', 'Write Commit Message with Claude', '', CommitMessageExecute));
@@ -1048,6 +1050,73 @@ begin
     Dir := Parent;
   end;
   Result := False;
+end;
+
+procedure TClaudeCodeWizard.FormFromPictureExecute(Sender: TObject);
+var
+  FormName, FormFile, Image: string;
+  Dlg: TOpenDialog;
+  Bmp: TBitmap;
+  Png: TPngImage;
+  Args: TJSONObject;
+  Prompt: string;
+begin
+  if not CurrentFormInfo(FormName, FormFile) then
+  begin
+    ShowMessage('Open the form to build on in the designer first (a new, empty form is fine).');
+    Exit;
+  end;
+  Image := '';
+  // A screenshot in the clipboard is the quickest source; otherwise a file.
+  if Clipboard.HasFormat(CF_BITMAP) then
+    case MessageDlg('Use the picture in the clipboard? (No: choose a file)', mtConfirmation,
+      [mbYes, mbNo, mbCancel], 0) of
+      mrYes:
+        begin
+          Bmp := TBitmap.Create;
+          Png := TPngImage.Create;
+          try
+            Bmp.Assign(Clipboard);
+            Png.Assign(Bmp);
+            Image := TPath.Combine(TPath.Combine(TPath.GetTempPath, 'claude-delphi'),
+              Format('form-picture-%s.png', [FormatDateTime('yyyymmdd-hhnnss', Now)]));
+            ForceDirectories(ExtractFilePath(Image));
+            Png.SaveToFile(Image);
+          finally
+            Png.Free;
+            Bmp.Free;
+          end;
+        end;
+      mrCancel:
+        Exit;
+    end;
+  if Image = '' then
+  begin
+    Dlg := TOpenDialog.Create(nil);
+    try
+      Dlg.Title := 'Picture of the form to build (screenshot, mockup or sketch)';
+      Dlg.Filter := 'Pictures (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp)|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp';
+      Dlg.Options := Dlg.Options + [ofFileMustExist];
+      if not Dlg.Execute then
+        Exit;
+      Image := Dlg.FileName;
+    finally
+      Dlg.Free;
+    end;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  Args := TJSONObject.Create;
+  try
+    Args.AddPair('image', Image);
+    Args.AddPair('form', FormName + ' (' + ExtractFileName(FormFile) + ')');
+    if not RenderPrompt('screenshot-to-form', Args, Prompt) then
+      Exit;
+  finally
+    Args.Free;
+  end;
+  // Pasted, not submitted: the user can add what the picture does not show (behavior, data).
+  SendToClaude(Prompt, False);
 end;
 
 procedure TClaudeCodeWizard.ReviewChangesExecute(Sender: TObject);

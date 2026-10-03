@@ -143,6 +143,7 @@ Menu **Tools → Claude Code**:
 
   ![Modernize Project dialog](docs/images/modernize.png)
 
+- **Design Form from Picture with Claude...**: takes a screenshot, mockup or sketch (from the clipboard or a file) and has Claude build it on the form open in the designer: it writes the controls as DFM, creates them with `pasteDfm`, compares `captureForm` with the picture and adjusts until they match. The request is pasted, so you can add what the picture does not show.
 - **Claude Timeline...**: Claude's turns with the files each one changed (see below).
 - **Review Changes with Claude**: Claude reviews the uncommitted changes (`git diff HEAD`) for bugs, object lifetime, exceptions, encoding, threads and `.dfm`/code consistency, builds and runs the tests, ranks the findings and fixes the clear ones through the usual review of changes; it never stages or commits.
 - **Write Commit Message with Claude**: a message for the staged (or all uncommitted) changes in the style of the recent commits.
