@@ -66,7 +66,10 @@ begin
       [Arg('table', 'The table', True), Arg('connection', 'Form.Component of the FireDAC connection; default: the first')]),
     Def('modernize', 'Modernize the project: win64, unicode, bde (to FireDAC), warnings or leaks',
       [Arg('scenario', 'win64, unicode, bde, warnings or leaks', True)]),
-    Def('explain-architecture', 'Explain how the project is structured, from its unit dependencies', [])];
+    Def('explain-architecture', 'Explain how the project is structured, from its unit dependencies', []),
+    Def('review-changes', 'Review the uncommitted changes before they are committed, then fix what is clearly wrong',
+      [Arg('focus', 'What to look at especially (e.g. "thread safety"); default: everything')]),
+    Def('commit-message', 'Write a commit message for the staged (or all uncommitted) changes', [])];
 end;
 
 function PromptListJson: TJSONArray;
@@ -201,6 +204,26 @@ begin
       'units; read code only where needed. Describe the layers and responsibilities, the main flows, the forms ' +
       'and data modules, and the problems you see (cycles, units that do too much, UI code mixed with logic). ' +
       'Offer to open the interactive map (showProjectMap).'
+  else if Name = 'review-changes' then
+  begin
+    Text := 'Review the uncommitted changes of this project before they are committed. Run git status --short ' +
+      'and git diff HEAD in the project folder (the repository root may be above it; read untracked source files ' +
+      'whole). Look at each change in context (getUnitOutline, findReferences for changed signatures) and check: ' +
+      'correctness and edge cases; object lifetime (Create without try/finally Free, owners, interface and object ' +
+      'references mixed); exceptions swallowed or leaking resources; string and encoding issues; VCL used from ' +
+      'threads; .dfm and code out of step (components referenced in code, event handlers assigned).';
+    V := JsonStr(Args, 'focus');
+    if V <> '' then
+      Text := Text + ' Pay special attention to: ' + V + '.';
+    Text := Text + ' Build the project (mcp__delphi__buildProject) and run the tests if there are any (runTests). ' +
+      'Report the findings ranked by severity with file:line, then fix the clear ones, one file at a time with ' +
+      'your normal editing so the user reviews each change in the IDE. Do not stage or commit anything.';
+  end
+  else if Name = 'commit-message' then
+    Text := 'Write a commit message for the changes about to be committed: the staged ones (git diff --cached), ' +
+      'or all uncommitted ones (git diff HEAD) if nothing is staged. Follow the style of the recent commits ' +
+      '(git log -10). A summary line in the imperative of at most 72 characters, a blank line, then a body ' +
+      'wrapped at 72 that says what changed and why. Show the message; do not commit unless asked.'
   else
     Result := False;
 end;

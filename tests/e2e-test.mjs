@@ -399,7 +399,10 @@ if (want('timeline')) {
 if (want('prompts')) {
   console.log('--- prompts and hooks settings');
   const l = await rpc('prompts/list', {});
-  check(l.result.prompts.length === 6, 'six prompts');
+  check(l.result.prompts.length === 8, 'eight prompts');
+  const rv = await rpc('prompts/get', { name: 'review-changes', arguments: { focus: 'thread safety' } });
+  check(/git diff HEAD/.test(rv.result.messages[0].content.text) && /thread safety/.test(rv.result.messages[0].content.text),
+    'review-changes prompt');
   const g = await rpc('prompts/get', { name: 'hunt-bug', arguments: { description: 'total is 0' } });
   check(g.result.messages[0].content.text.includes('total is 0'), 'prompts/get fills arguments');
   const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'ide', `${port}.delphi-settings.json`), 'utf8'));

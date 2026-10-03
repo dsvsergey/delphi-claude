@@ -73,7 +73,8 @@ Claude Code використовує IDE-з'єднання сам і з ньог
 
 **Slash-команди.** Сервер `delphi` також віддає готові сценарії як MCP prompts; Claude Code показує їх як команди:
 `/mcp__delphi__make-tests-pass`, `/mcp__delphi__hunt-bug <що не так>`, `/mcp__delphi__screenshot-to-form <картинка>`,
-`/mcp__delphi__crud-form <таблиця>`, `/mcp__delphi__modernize <сценарій>`, `/mcp__delphi__explain-architecture`.
+`/mcp__delphi__crud-form <таблиця>`, `/mcp__delphi__modernize <сценарій>`, `/mcp__delphi__explain-architecture`,
+`/mcp__delphi__review-changes [фокус]`, `/mcp__delphi__commit-message`.
 `claude`, запущений поза IDE, може використати інструменти останньої запущеної IDE:
 `claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
@@ -143,6 +144,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   ![Діалог Modernize Project](docs/images/modernize.png)
 
 - **Claude Timeline...**: ходи Claude з файлами, які змінив кожен (див. нижче).
+- **Review Changes with Claude**: Claude переглядає незакомічені зміни (`git diff HEAD`) на помилки, час життя об'єктів, винятки, кодування, потоки та узгодженість `.dfm` і коду, збирає проєкт і запускає тести, впорядковує знахідки за важливістю й виправляє очевидні через звичайний перегляд змін; нічого не додає в індекс і не комітить.
+- **Write Commit Message with Claude**: повідомлення коміту для змін в індексі (або всіх незакомічених) у стилі останніх комітів.
 - **Create CLAUDE.md for Project...**: записує в `CLAUDE.md` проєкту розділ «Delphi project» (тип, framework, платформи, команда збірки, кодування юнітів, форми, DUnitX-проєкти, коли використовувати `mcp__delphi__*`). Генерується лише частина між `<!-- delphi:begin -->` і `<!-- delphi:end -->`; спершу ви переглядаєте її у вікні diff.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): додає в підказку Claude `@файл#Lx-y` для виділеного фрагмента; у дизайнері форм вставляє виділені компоненти як DFM-текст.
 - **Status and Log…**: порт, кількість підключених клієнтів, lock-файл, журнал.

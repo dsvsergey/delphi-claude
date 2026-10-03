@@ -74,7 +74,7 @@ Designer changes are not saved automatically: review them in the IDE and save or
 **Slash commands.** The `delphi` server also offers ready workflows as MCP prompts; Claude Code shows them as
 commands: `/mcp__delphi__make-tests-pass`, `/mcp__delphi__hunt-bug <what goes wrong>`,
 `/mcp__delphi__screenshot-to-form <image>`, `/mcp__delphi__crud-form <table>`, `/mcp__delphi__modernize <scenario>`,
-`/mcp__delphi__explain-architecture`.
+`/mcp__delphi__explain-architecture`, `/mcp__delphi__review-changes [focus]`, `/mcp__delphi__commit-message`.
 A `claude` started outside the IDE can use the tools of the most recently started IDE with
 `claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
@@ -144,6 +144,8 @@ Menu **Tools → Claude Code**:
   ![Modernize Project dialog](docs/images/modernize.png)
 
 - **Claude Timeline...**: Claude's turns with the files each one changed (see below).
+- **Review Changes with Claude**: Claude reviews the uncommitted changes (`git diff HEAD`) for bugs, object lifetime, exceptions, encoding, threads and `.dfm`/code consistency, builds and runs the tests, ranks the findings and fixes the clear ones through the usual review of changes; it never stages or commits.
+- **Write Commit Message with Claude**: a message for the staged (or all uncommitted) changes in the style of the recent commits.
 - **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.

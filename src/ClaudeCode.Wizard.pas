@@ -74,6 +74,9 @@ type
     procedure ClaudeMdExecute(Sender: TObject);
     procedure ProjectMapExecute(Sender: TObject);
     procedure ModernizeExecute(Sender: TObject);
+    procedure ReviewChangesExecute(Sender: TObject);
+    procedure CommitMessageExecute(Sender: TObject);
+    function InGitRepository: Boolean;
     procedure TimelineExecute(Sender: TObject);
     function SessionFrame: TClaudeTerminalFrame;
     procedure SendToClaude(const Text: string; Submit: Boolean);
@@ -449,6 +452,8 @@ begin
   AddItem(NewAction('ClaudeCodeProjectMapAction', 'Project Map...', '', ProjectMapExecute));
   AddItem(NewAction('ClaudeCodeModernizeAction', 'Modernize Project with Claude...', '', ModernizeExecute));
   AddItem(NewAction('ClaudeCodeTimelineAction', 'Claude Timeline...', '', TimelineExecute));
+  AddItem(NewAction('ClaudeCodeReviewAction', 'Review Changes with Claude', '', ReviewChangesExecute));
+  AddItem(NewAction('ClaudeCodeCommitMsgAction', 'Write Commit Message with Claude', '', CommitMessageExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
@@ -1025,6 +1030,48 @@ procedure TClaudeCodeWizard.ProjectMapExecute(Sender: TObject);
 begin
   if not OpenProjectMap(IdeIsDark) then
     ShowMessage('Open a project first.');
+end;
+
+function TClaudeCodeWizard.InGitRepository: Boolean;
+var
+  Dir, Parent: string;
+begin
+  // The project folder or one above it holds .git (a folder, or a file in a worktree/submodule).
+  Dir := ExcludeTrailingPathDelimiter(WorkDir);
+  while Dir <> '' do
+  begin
+    if DirectoryExists(Dir + '\.git') or FileExists(Dir + '\.git') then
+      Exit(True);
+    Parent := ExcludeTrailingPathDelimiter(ExtractFilePath(Dir));
+    if SameText(Parent, Dir) then
+      Break;
+    Dir := Parent;
+  end;
+  Result := False;
+end;
+
+procedure TClaudeCodeWizard.ReviewChangesExecute(Sender: TObject);
+begin
+  if not InGitRepository then
+  begin
+    ShowMessage('The project is not in a git repository: there are no uncommitted changes to review.');
+    Exit;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  SendToClaude(PromptText('review-changes', '', ''), LoadSettings.SubmitRequests);
+end;
+
+procedure TClaudeCodeWizard.CommitMessageExecute(Sender: TObject);
+begin
+  if not InGitRepository then
+  begin
+    ShowMessage('The project is not in a git repository.');
+    Exit;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  SendToClaude(PromptText('commit-message', '', ''), LoadSettings.SubmitRequests);
 end;
 
 procedure TClaudeCodeWizard.ModernizeExecute(Sender: TObject);

@@ -145,7 +145,7 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
     'http: every tool has a schema and a description');
   h = await post({ jsonrpc: '2.0', id: 6, method: 'prompts/list' });
   const pn = h.json.result.prompts.map(p => p.name);
-  check(['make-tests-pass','hunt-bug','screenshot-to-form','crud-form','modernize','explain-architecture'].every(n => pn.includes(n)),
+  check(['make-tests-pass','hunt-bug','screenshot-to-form','crud-form','modernize','explain-architecture','review-changes','commit-message'].every(n => pn.includes(n)),
     `http: prompts/list (${pn.join(', ')})`);
   h = await post({ jsonrpc: '2.0', id: 7, method: 'prompts/get', params: { name: 'modernize', arguments: { scenario: 'win64' } } });
   check(h.json.result.messages[0].content.text.includes('analyzeModernization'), 'http: prompts/get renders arguments');
