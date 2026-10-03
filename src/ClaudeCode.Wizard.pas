@@ -151,6 +151,7 @@ begin
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
+  TClaudeTerminalFrame.DropSource := ProjectManagerSelection;
   RegisterClaudePanel;
   ProjectMapAsk :=
     procedure(UnitName, FileName: string)
@@ -170,6 +171,7 @@ begin
   UnregisterClaudePanel; // stops the terminal session
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
+  TClaudeTerminalFrame.DropSource := nil;
   DestroyAllDiffForms;
   DestroyProjectMapWindow;
   DestroyTimelineWindow;

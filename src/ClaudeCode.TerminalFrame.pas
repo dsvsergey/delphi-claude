@@ -31,6 +31,8 @@ type
   { Execute=False: return True if the IDE wants this key (it is then taken from the terminal).
     Execute=True: perform the IDE command. }
   TTerminalHostKeyFunc = reference to function(Key: Word; Shift: TShiftState; Execute: Boolean): Boolean;
+  { Paths of what is being dragged inside the IDE (the Project Manager's drag carries no file names). }
+  TTerminalDropSourceFunc = reference to function: TArray<string>;
 
   TClaudeTerminalFrame = class;
 
@@ -76,6 +78,7 @@ type
     procedure Changed;
     procedure PasteFromClipboard;
     procedure PastePaths(const Paths: TArray<string>);
+    procedure DropWithoutFiles(const Text, Types: string);
     procedure WMHostKey(var Msg: TMessage); message WM_CC_HOSTKEY;
     procedure WMOpenLink(var Msg: TMessage); message WM_CC_OPENLINK;
   public
@@ -125,6 +128,7 @@ type
   public
     class var HostInfo: TTerminalHostInfoFunc;
     class var HostKey: TTerminalHostKeyFunc;
+    class var DropSource: TTerminalDropSourceFunc;
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     { A new tab for WorkDir (the IDE's current project folder when empty), made active. }
@@ -167,7 +171,7 @@ implementation
 uses
   Winapi.ShellAPI, System.JSON, System.Types, System.StrUtils, System.IOUtils, Vcl.Clipbrd,
   Vcl.Imaging.pngimage,
-  ClaudeCode.Launcher;
+  ClaudeCode.Launcher, ClaudeCode.Utils;
 
 function LoadTextResource(const Name: string): string;
 var
@@ -405,6 +409,8 @@ begin
           Files := Files + [Arr.Items[I].Value];
       PastePaths(Files);
     end
+    else if T = 'dropOther' then
+      DropWithoutFiles(O.GetValue<string>('text', ''), O.GetValue<string>('types', ''))
     else if T = 'title' then
     begin
       FTitle := O.GetValue<string>('title', '');
@@ -616,6 +622,26 @@ begin
     Text := Text + S + ' ';
   end;
   if Text <> '' then
+    PasteInput(Text);
+end;
+
+procedure TClaudeSessionView.DropWithoutFiles(const Text, Types: string);
+var
+  Paths: TArray<string>;
+  Pid: DWORD;
+begin
+  // A drag inside the IDE (Project Manager nodes) brings no file names: the IDE says what was dragged.
+  // Only while the IDE is the active application, so a drop from another program is never mistaken for it.
+  Log('Drop without files; types: ' + Types);
+  Paths := nil;
+  GetWindowThreadProcessId(GetForegroundWindow, Pid);
+  if Assigned(TClaudeTerminalFrame.DropSource) and (Pid = GetCurrentProcessId) then
+    Paths := TClaudeTerminalFrame.DropSource();
+  // Text that is not just the dragged node's name (e.g. code dragged from the editor) stays text.
+  if (Length(Paths) > 0) and ((Trim(Text) = '') or
+     SameText(Trim(Text), ExtractFileName(ExcludeTrailingPathDelimiter(Paths[0])))) then
+    PastePaths(Paths)
+  else if Text <> '' then
     PasteInput(Text);
 end;
 

@@ -96,7 +96,7 @@ After a session ends, pressing Enter in the panel starts a new one.
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
 - **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste text; a copied picture (screenshot) is saved as PNG and its path pasted so Claude attaches it; copied files become `@`-mentions;
-- files dragged onto the terminal are pasted as `@`-mentions (pictures as paths);
+- files dragged onto the terminal from Explorer or the **Project Manager** are pasted as `@`-mentions (pictures as paths; a project node stands for its folder, one node per drag);
 - **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
 - **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
 
