@@ -145,6 +145,8 @@ type
     function AddView(const WorkDir: string = ''): TClaudeSessionView;
     { The tab for WorkDir: an existing one, the active tab when it has no session yet, or a new one. }
     function ViewFor(const WorkDir: string): TClaudeSessionView;
+    { A tab for a new session in WorkDir: the active one when nothing was started in it, else a new tab. }
+    function UnusedView(const WorkDir: string): TClaudeSessionView;
     { The status line of the sessions running in Dir (model, context, cost). }
     procedure SetSessionUsage(const Dir, Text: string);
     procedure ActivateView(View: TClaudeSessionView);
@@ -971,6 +973,21 @@ begin
       ViewChanged(V);
     end;
   end;
+end;
+
+function TClaudeTerminalFrame.UnusedView(const WorkDir: string): TClaudeSessionView;
+var
+  V: TClaudeSessionView;
+begin
+  V := ActiveView;
+  if (V <> nil) and not V.SessionRunning and (V.Command = '') then
+  begin
+    V.FWorkDir := WorkDir;
+    V.FIdleHintShown := True;
+    ViewChanged(V);
+    Exit(V);
+  end;
+  Result := AddView(WorkDir);
 end;
 
 function TClaudeTerminalFrame.ViewFor(const WorkDir: string): TClaudeSessionView;

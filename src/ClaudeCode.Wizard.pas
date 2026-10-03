@@ -14,6 +14,7 @@ uses
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, Vcl.Clipbrd, Vcl.Imaging.pngimage, System.UITypes, ToolsAPI,
   ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm, ClaudeCode.IdeTrees,
+  ClaudeCode.BackgroundTasks, ClaudeCode.Process,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
   ClaudeCode.ProjectMap, ClaudeCode.ProjectMapForm, ClaudeCode.CodeTools, ClaudeCode.Prompts,
@@ -41,6 +42,8 @@ type
     FLastSent: TSelectionInfo;
     FLog: TStringList;
     FContextMenus: TClaudeContextMenus;
+    FTasks: TBackgroundTasks;
+    FTasksAction: TAction;
     procedure AddLog(const Msg: string);
     procedure StartServer;
     procedure CreateMenu;
@@ -76,6 +79,11 @@ type
     procedure ProjectMapExecute(Sender: TObject);
     procedure ModernizeExecute(Sender: TObject);
     procedure ReviewChangesExecute(Sender: TObject);
+    procedure BackgroundTaskExecute(Sender: TObject);
+    procedure BackgroundTasksExecute(Sender: TObject);
+    procedure TasksChanged(Sender: TObject);
+    procedure TaskFinished(Task: TBackgroundTask);
+    function BackgroundCommand(const Prompt: string): string;
     procedure FormFromPictureExecute(Sender: TObject);
     procedure CommitMessageExecute(Sender: TObject);
     function InGitRepository: Boolean;
@@ -185,6 +193,8 @@ begin
   DestroyAllDiffForms;
   DestroyProjectMapWindow;
   DestroyTimelineWindow;
+  DestroyBackgroundTasksWindow;
+  FreeAndNil(FTasks); // stops the tasks that still run
   FBackend.Shutdown; // a running build must not answer through a freed server
   if FMcp <> nil then
   begin
@@ -509,6 +519,10 @@ begin
   AddItem(NewAction('ClaudeCodeModernizeAction', 'Modernize Project with Claude...', '', ModernizeExecute));
   AddItem(NewAction('ClaudeCodeFormPictureAction', 'Design Form from Picture with Claude...', '', FormFromPictureExecute));
   AddItem(NewAction('ClaudeCodeTimelineAction', 'Claude Timeline...', '', TimelineExecute));
+  AddItem(NewAction('ClaudeCodeBgTaskAction', 'Background Task with Claude...', '', BackgroundTaskExecute));
+  FTasksAction := NewAction('ClaudeCodeBgTasksAction', 'Background Tasks...', '', BackgroundTasksExecute);
+  FTasksAction.OnUpdate := TasksChanged; // the caption counts the running tasks
+  AddItem(FTasksAction);
   AddItem(NewAction('ClaudeCodeReviewAction', 'Review Changes with Claude', '', ReviewChangesExecute));
   AddItem(NewAction('ClaudeCodeCommitMsgAction', 'Write Commit Message with Claude', '', CommitMessageExecute));
   AddSeparator;
@@ -1262,6 +1276,102 @@ begin
     Exit;
   // Pasted, not submitted: the user can add constraints (keep Win32, which units first...).
   SendToClaude(PromptText('modernize', 'scenario', Scenario), False);
+end;
+
+function TClaudeCodeWizard.BackgroundCommand(const Prompt: string): string;
+var
+  S: TClaudeSettings;
+  Cmd: string;
+begin
+  // claude -p: one unattended turn. File edits are applied (acceptEdits) and the hooks record them for
+  // the timeline; only reading, editing and the Delphi tools are allowed (no shell). --mcp-config last.
+  S := LoadSettings;
+  Cmd := S.PanelCommand + ' -p ' + QuoteArg(Prompt.Replace(sLineBreak, ' ').Replace(#10, ' ')) +
+    ' --output-format json --permission-mode acceptEdits --allowedTools ' +
+    QuoteArg('mcp__delphi Read Grep Glob Edit Write MultiEdit');
+  if Trim(S.Model) <> '' then
+    Cmd := Cmd + ' --model ' + QuoteArg(Trim(S.Model));
+  if S.Timeline and (FMcp.HookSettingsFile <> '') then
+    Cmd := Cmd + ' --settings ' + QuoteArg(FMcp.HookSettingsFile);
+  if FMcp.McpConfigFile <> '' then
+    Cmd := Cmd + ' --mcp-config ' + QuoteArg(FMcp.McpConfigFile);
+  Result := ResolveCommandLine(Cmd);
+end;
+
+procedure TClaudeCodeWizard.BackgroundTaskExecute(Sender: TObject);
+var
+  UnitFile, Title, Prompt: string;
+  Buffer: IOTAEditBuffer;
+begin
+  if not FMcp.Running then
+    StartServer;
+  UnitFile := '';
+  Buffer := EditorServices.TopBuffer;
+  if (Buffer <> nil) and SameText(ExtractFileExt(Buffer.FileName), '.pas') then
+    UnitFile := Buffer.FileName;
+  if not ChooseBackgroundTask(TaskTemplates(UnitFile), Title, Prompt, ThemeIdeForm) then
+    Exit;
+  if FTasks = nil then
+  begin
+    FTasks := TBackgroundTasks.Create;
+    FTasks.OnFinished := TaskFinished;
+  end;
+  FTasks.Start(Title, Prompt, BackgroundCommand(Prompt), WorkDir);
+  TasksChanged(nil);
+  BackgroundTasksExecute(nil);
+end;
+
+procedure TClaudeCodeWizard.BackgroundTasksExecute(Sender: TObject);
+begin
+  if FTasks = nil then
+  begin
+    FTasks := TBackgroundTasks.Create;
+    FTasks.OnFinished := TaskFinished;
+  end;
+  ShowBackgroundTasks(FTasks,
+    procedure(Task: TBackgroundTask)
+    var
+      Frame: TClaudeTerminalFrame;
+    begin
+      // The task's conversation in a new tab: ask what it did, or go on with it.
+      Frame := ShowClaudePanel;
+      if Frame <> nil then
+        Frame.UnusedView(Task.WorkDir).StartSession('--resume ' + Task.SessionId, True);
+    end,
+    procedure
+    begin
+      TimelineExecute(nil);
+    end,
+    ThemeIdeForm);
+end;
+
+procedure TClaudeCodeWizard.TasksChanged(Sender: TObject);
+var
+  N: Integer;
+begin
+  if (FTasksAction = nil) or (FTasks = nil) then
+    Exit;
+  N := FTasks.RunningCount;
+  if N > 0 then
+    FTasksAction.Caption := Format('Background Tasks (%d running)...', [N])
+  else
+    FTasksAction.Caption := 'Background Tasks...';
+end;
+
+procedure TClaudeCodeWizard.TaskFinished(Task: TBackgroundTask);
+var
+  Info: FLASHWINFO;
+begin
+  TasksChanged(nil);
+  // Tell the user when they are elsewhere: the IDE flashes on the taskbar.
+  if (Application.MainForm <> nil) and (GetForegroundWindow <> Application.MainForm.Handle) then
+  begin
+    Info := Default(FLASHWINFO);
+    Info.cbSize := SizeOf(Info);
+    Info.hwnd := Application.MainForm.Handle;
+    Info.dwFlags := FLASHW_TRAY or FLASHW_TIMERNOFG;
+    FlashWindowEx(Info);
+  end;
 end;
 
 procedure TClaudeCodeWizard.TimelineExecute(Sender: TObject);

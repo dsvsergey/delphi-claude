@@ -145,6 +145,7 @@ Menu **Tools → Claude Code**:
 
 - **Design Form from Picture with Claude...**: takes a screenshot, mockup or sketch (from the clipboard or a file) and has Claude build it on the form open in the designer: it writes the controls as DFM, creates them with `pasteDfm`, compares `captureForm` with the picture and adjusts until they match. The request is pasted, so you can add what the picture does not show.
 - **Claude Timeline...**: Claude's turns with the files each one changed (see below).
+- **Background Task with Claude...**: Claude works on a task in a separate process (`claude -p`) while you go on: DUnitX tests or XML documentation for the unit in the editor, clearing the compiler warnings, or a request of your own. Its file edits are applied right away and recorded in the Claude Timeline (review and rewind them there); it may read, edit and use the Delphi tools, but not run shell commands. **Background Tasks...** lists the tasks with their state, cost and Claude's summary; **Continue in Panel** opens a task's conversation in the panel. The IDE flashes on the taskbar when a task ends.
 - **Review Changes with Claude**: Claude reviews the uncommitted changes (`git diff HEAD`) for bugs, object lifetime, exceptions, encoding, threads and `.dfm`/code consistency, builds and runs the tests, ranks the findings and fixes the clear ones through the usual review of changes; it never stages or commits.
 - **Write Commit Message with Claude**: a message for the staged (or all uncommitted) changes in the style of the recent commits.
 - **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
@@ -264,6 +265,7 @@ src/ClaudeCode.Timeline.pas       turns and file snapshots from Claude Code hook
 src/ClaudeCode.TimelineForm.pas   Claude Timeline window
 src/ClaudeCode.InlineDiff.pas     reviewing proposed changes in the code editor
 src/ClaudeCode.IdeTrees.pas       what is dragged from the Project Manager and Structure view (RTTI)
+src/ClaudeCode.BackgroundTasks.pas background tasks (claude -p), their dialog and window
 tests/e2e/                        sample project group for end-to-end tests in a real IDE
 tests/e2e-test.mjs                end-to-end test of the tools in a running IDE with tests/e2e open
 tests/mcp-call.mjs, ide-call.mjs  call one tool of a running IDE (delphi server / IDE channel)

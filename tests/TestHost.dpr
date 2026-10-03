@@ -9,7 +9,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
   ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo, ClaudeCode.PascalIndex, ClaudeCode.TestRunner,
-  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline,
+  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline, ClaudeCode.BackgroundTasks,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -763,6 +763,26 @@ begin
   Writeln('TIMELINE OK');
 end;
 
+procedure BackgroundTaskSelfTest;
+var
+  Text, Session: string;
+  Cost: Double;
+  IsError: Boolean;
+  T: TArray<TTaskTemplate>;
+begin
+  // claude -p --output-format json: a warning on stderr may come first.
+  Expect(ParseClaudeResult('warning: something' + #10 + '{"type":"result","subtype":"success","is_error":false,' +
+    '"result":"Added 3 tests.","session_id":"abc","total_cost_usd":0.125}' + #10, Text, Cost, Session, IsError) and
+    (Text = 'Added 3 tests.') and (Session = 'abc') and (Abs(Cost - 0.125) < 1e-9) and not IsError, 'claude -p result');
+  Expect(ParseClaudeResult('{"type":"result","is_error":true,"result":"Credit balance is too low"}', Text, Cost,
+    Session, IsError) and IsError, 'claude -p error result');
+  Expect(not ParseClaudeResult('command not found', Text, Cost, Session, IsError), 'no result object');
+  T := TaskTemplates('C:' + PathDelim + 'p' + PathDelim + 'Unit1.pas');
+  Expect((Length(T) = 3) and T[0].Title.Contains('Unit1.pas') and T[0].Prompt.Contains('do not ask'), 'task templates');
+  Expect(Length(TaskTemplates('')) = 1, 'templates without a unit');
+  Writeln('BACKGROUND TASKS OK');
+end;
+
 procedure ConversationSelfTest;
 var
   Dir, Old: string;
@@ -810,6 +830,7 @@ begin
     ModernizeSelfTest;
     TimelineSelfTest;
     ConversationSelfTest;
+    BackgroundTaskSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;
