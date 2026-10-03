@@ -70,7 +70,16 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   });
+  // A drag from the IDE's own trees (no files in it): the host notes what is being dragged now,
+  // while the source still is in its drag.
+  let ideDragNoted = false;
+  document.addEventListener('dragenter', (e) => {
+    const types = e.dataTransfer ? Array.from(e.dataTransfer.types || []) : [];
+    if (!ideDragNoted && !types.includes('Files')) { ideDragNoted = true; post({ t: 'dragIde' }); }
+  });
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) ideDragNoted = false; });
   document.addEventListener('drop', (e) => {
+    ideDragNoted = false;
     e.preventDefault();
     const files = e.dataTransfer && e.dataTransfer.files;
     if (files && files.length && host && host.postMessageWithAdditionalObjects)

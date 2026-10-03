@@ -13,7 +13,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Win.Registry,
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
   Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, Vcl.Clipbrd, Vcl.Imaging.pngimage, System.UITypes, ToolsAPI,
-  ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
+  ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm, ClaudeCode.IdeTrees,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
   ClaudeCode.ProjectMap, ClaudeCode.ProjectMapForm, ClaudeCode.CodeTools, ClaudeCode.Prompts,
@@ -160,6 +160,7 @@ begin
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
   TClaudeTerminalFrame.DropSource := ProjectManagerSelection;
+  TClaudeTerminalFrame.DragSource := IdeTreeDragItems;
   RegisterClaudePanel;
   ProjectMapAsk :=
     procedure(UnitName, FileName: string)
@@ -180,6 +181,7 @@ begin
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
   TClaudeTerminalFrame.DropSource := nil;
+  TClaudeTerminalFrame.DragSource := nil;
   DestroyAllDiffForms;
   DestroyProjectMapWindow;
   DestroyTimelineWindow;

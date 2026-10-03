@@ -61,6 +61,8 @@ type
     FCommand: string;
     FTitle: string;         // terminal title set by Claude
     FUsage: string;         // model, context and cost from Claude Code's status line
+    FDragItems: TArray<string>; // noted when a drag from an IDE tree entered the terminal
+    FDragTick: UInt64;
     FProgress: Boolean;     // OSC 9;4 progress is showing
     FBusy: Boolean;         // Claude is working on a turn
     FAttention: Boolean;    // Claude asked for the user (bell / notification) since the last key
@@ -135,6 +137,8 @@ type
     class var HostInfo: TTerminalHostInfoFunc;
     class var HostKey: TTerminalHostKeyFunc;
     class var DropSource: TTerminalDropSourceFunc;
+    { What an IDE tree is dragging right now (asked while the drag enters the terminal). }
+    class var DragSource: TTerminalDropSourceFunc;
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     { A new tab for WorkDir (the IDE's current project folder when empty), made active. }
@@ -417,6 +421,13 @@ begin
           Files := Files + [Arr.Items[I].Value];
       PastePaths(Files);
     end
+    else if T = 'dragIde' then
+    begin
+      FDragItems := nil;
+      if Assigned(TClaudeTerminalFrame.DragSource) then
+        FDragItems := TClaudeTerminalFrame.DragSource();
+      FDragTick := GetTickCount64;
+    end
     else if T = 'dropOther' then
       DropWithoutFiles(O.GetValue<string>('text', ''), O.GetValue<string>('types', ''))
     else if T = 'title' then
@@ -645,8 +656,13 @@ begin
   Log('Drop without files; types: ' + Types);
   Paths := nil;
   GetWindowThreadProcessId(GetForegroundWindow, Pid);
-  if Assigned(TClaudeTerminalFrame.DropSource) and (Pid = GetCurrentProcessId) then
+  // What the drag carried, noted when it entered (all selected nodes, Structure view items too);
+  // otherwise the node selected in the Project Manager.
+  if (Length(FDragItems) > 0) and (GetTickCount64 - FDragTick < 120000) then
+    Paths := FDragItems
+  else if Assigned(TClaudeTerminalFrame.DropSource) and (Pid = GetCurrentProcessId) then
     Paths := TClaudeTerminalFrame.DropSource();
+  FDragItems := nil;
   // Text that is not just the dragged node's name (e.g. code dragged from the editor) stays text.
   if (Length(Paths) > 0) and ((Trim(Text) = '') or
      SameText(Trim(Text), ExtractFileName(ExcludeTrailingPathDelimiter(Paths[0])))) then

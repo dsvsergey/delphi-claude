@@ -438,6 +438,18 @@ begin
   Expect((Info.UnitName = 'Demo.Orders') and (Info.UnitKind = 'unit') and (Info.LineCount = 37), 'unit header');
   Expect((Length(Info.IntfUses) = 2) and (Info.IntfUses[1].Name = 'Vcl.Forms') and (Length(Info.ImplUses) = 1),
     'uses clauses');
+  // Structure view nodes: a method gives its body, a type its block, a field its line.
+  Expect(FindStructureItem(Info, ['Structure', 'implementation', 'TOrder.Save(const Name: string)'], D) and
+    (D.Line = 25) and (D.EndLine = 31), Format('structure: method body %s %s.%s %d-%d', [D.KindName, D.Parent, D.Name, D.Line, D.EndLine]));
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder', 'Save(const Name: string)'], D) and
+    (D.Line = 25), 'structure: method of a class goes to its body');
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder'], D) and (D.Line = 6) and (D.EndLine = 14),
+    Format('structure: class block %d-%d', [D.Line, D.EndLine]));
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder', 'FTotal: Currency'], D) and (D.Line = 8),
+    'structure: field');
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'Helper(X: Integer): Integer'], D) and
+    (D.Line = 33) and (D.EndLine = 36), 'structure: routine declared in the interface');
+  Expect(not FindStructureItem(Info, ['Structure', 'interface', 'Nope'], D), 'structure: unknown');
   Expect(FindDecl(Info, 'TOrder', pdClass, D) and (D.Line = 6) and (D.EndLine = 14) and
     (D.Ancestor = 'TPersistent, IInterface'), 'class range/ancestor: ' + D.Ancestor);
   Expect(FindDecl(Info, 'TOrder.FTax', pdField, D) and (D.Visibility = 'private'), 'field list');

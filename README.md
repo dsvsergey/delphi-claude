@@ -96,7 +96,7 @@ After a session ends, pressing Enter in the panel starts a new one.
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
 - **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste text; a copied picture (screenshot) is saved as PNG and its path pasted so Claude attaches it; copied files become `@`-mentions;
-- files dragged onto the terminal from Explorer or the **Project Manager** are pasted as `@`-mentions (pictures as paths; a project node stands for its folder, one node per drag);
+- files dragged onto the terminal from Explorer or the **Project Manager** are pasted as `@`-mentions (pictures as paths; all selected nodes, a project stands for its folder); items dragged from the **Structure view** become `@file#Lx-y` (a method gives its body, a type its declaration);
 - **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
 - **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
 
@@ -263,6 +263,7 @@ src/ClaudeCode.Prompts.pas        MCP prompts (slash commands) of the delphi ser
 src/ClaudeCode.Timeline.pas       turns and file snapshots from Claude Code hooks (no ToolsAPI)
 src/ClaudeCode.TimelineForm.pas   Claude Timeline window
 src/ClaudeCode.InlineDiff.pas     reviewing proposed changes in the code editor
+src/ClaudeCode.IdeTrees.pas       what is dragged from the Project Manager and Structure view (RTTI)
 tests/e2e/                        sample project group for end-to-end tests in a real IDE
 tests/e2e-test.mjs                end-to-end test of the tools in a running IDE with tests/e2e open
 tests/mcp-call.mjs, ide-call.mjs  call one tool of a running IDE (delphi server / IDE channel)

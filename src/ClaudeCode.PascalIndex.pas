@@ -81,6 +81,12 @@ function ReplaceOccurrences(const Src: string; const Occ: TArray<TPasOccurrence>
 function SourceLine(const Src: string; Line: Integer): string;
 { "unit Unit1 (240 lines)" followed by uses and declarations, one per line with line numbers. }
 function UnitOutlineText(const Info: TPasUnitInfo; const FileName: string; WithMembers: Boolean): string;
+{ The declared name in a Structure view caption: "TOrder.CalcTotal: Currency" gives TOrder.CalcTotal. }
+function StructureCaptionName(const Caption: string): string;
+{ The declaration a Structure view node stands for. Parts are the captions from the root down
+  ("Structure", "implementation", "TOrder.Save(const Name: string)"); a routine or method gives its
+  body, a type, field or property its declaration. }
+function FindStructureItem(const Info: TPasUnitInfo; const Parts: TArray<string>; out Decl: TPasDecl): Boolean;
 
 implementation
 
@@ -1485,6 +1491,68 @@ begin
   while (Q <= Length(Src)) and not CharInSet(Src[Q], [#10, #13]) do
     Inc(Q);
   Result := Copy(Src, P, Q - P);
+end;
+
+function StructureCaptionName(const Caption: string): string;
+var
+  I: Integer;
+begin
+  Result := Caption;
+  for I := 1 to Length(Result) do
+    if CharInSet(Result[I], ['(', ':', ' ', '<', '=']) then
+      Exit(Copy(Result, 1, I - 1));
+end;
+
+function FindStructureItem(const Info: TPasUnitInfo; const Parts: TArray<string>; out Decl: TPasDecl): Boolean;
+var
+  Section, Name, Owner: string;
+  Dot, Found: Integer;
+
+  function Find(const Kinds: array of TPasDeclKind; const ASection: string): Integer;
+  var
+    I: Integer;
+    K: TPasDeclKind;
+  begin
+    for I := 0 to High(Info.Decls) do
+      for K in Kinds do
+        if (Info.Decls[I].Kind = K) and SameText(Info.Decls[I].Name, Name) and SameText(Info.Decls[I].Parent, Owner) and
+           ((ASection = '') or SameText(Info.Decls[I].Section, ASection)) then
+          Exit(I);
+    Result := -1;
+  end;
+
+begin
+  Result := False;
+  Decl := Default(TPasDecl);
+  if Length(Parts) < 3 then
+    Exit;
+  Section := LowerCase(Parts[1]);
+  Name := StructureCaptionName(Parts[High(Parts)]);
+  if Length(Parts) >= 4 then
+    Owner := StructureCaptionName(Parts[High(Parts) - 1]) // a member of a type
+  else
+  begin
+    // "TOrder.Save" in the implementation section: the method of TOrder.
+    Owner := '';
+    Dot := Name.LastIndexOf('.');
+    if Dot > 0 then
+    begin
+      Owner := Copy(Name, 1, Dot);
+      Name := Copy(Name, Dot + 2, MaxInt);
+    end;
+  end;
+  if (Section <> 'interface') and (Section <> 'implementation') then
+    Section := '';
+  // The body of a routine or method first, else the declaration (types span their whole block).
+  Found := Find([pdMethodImpl, pdRoutine], 'implementation');
+  if (Found < 0) and (Section <> 'implementation') then
+    Found := Find([pdType, pdClass, pdRecord, pdInterface, pdEnum, pdRoutine, pdMethod, pdProperty, pdField, pdConst,
+      pdVar, pdResourceString], Section);
+  if Found < 0 then
+    Found := Find([pdType, pdClass, pdRecord, pdInterface, pdEnum, pdRoutine, pdConst, pdVar, pdResourceString], '');
+  Result := Found >= 0;
+  if Result then
+    Decl := Info.Decls[Found];
 end;
 
 function UnitOutlineText(const Info: TPasUnitInfo; const FileName: string; WithMembers: Boolean): string;

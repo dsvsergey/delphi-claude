@@ -65,6 +65,7 @@ contains
   ClaudeCode.Timeline in 'src\ClaudeCode.Timeline.pas',
   ClaudeCode.TimelineForm in 'src\ClaudeCode.TimelineForm.pas',
   ClaudeCode.InlineDiff in 'src\ClaudeCode.InlineDiff.pas',
+  ClaudeCode.IdeTrees in 'src\ClaudeCode.IdeTrees.pas',
   ClaudeCode.SettingsForm in 'src\ClaudeCode.SettingsForm.pas',
   ClaudeCode.ClaudeMd in 'src\ClaudeCode.ClaudeMd.pas',
   ClaudeCode.ContextMenus in 'src\ClaudeCode.ContextMenus.pas',
