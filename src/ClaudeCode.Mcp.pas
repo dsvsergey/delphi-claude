@@ -746,7 +746,7 @@ end;
 
 procedure TMcpServer.WriteHookSettings;
 var
-  Cmd: string;
+  Cmd, Old: string;
   Root, Hooks: TJSONObject;
 
   function Entry(const Matcher: string): TJSONArray;
@@ -774,6 +774,11 @@ begin
   Hooks.AddPair('Stop', Entry(''));
   Root := TJSONObject.Create.AddPair('hooks', Hooks);
   try
+    // Settings of IDEs that ended without cleaning up (no lock file for that port any more).
+    for Old in TDirectory.GetFiles(ClaudeIdeLockDir, '*' + HOOK_SETTINGS_SUFFIX) do
+      if not FileExists(TPath.Combine(ClaudeIdeLockDir,
+        Copy(ExtractFileName(Old), 1, Length(ExtractFileName(Old)) - Length(HOOK_SETTINGS_SUFFIX)) + '.lock')) then
+        System.SysUtils.DeleteFile(Old);
     FHookSettingsFile := TPath.Combine(ClaudeIdeLockDir, IntToStr(FWs.Port) + HOOK_SETTINGS_SUFFIX);
     TFile.WriteAllBytes(FHookSettingsFile, TEncoding.UTF8.GetBytes(Root.Format(2)));
   finally
@@ -981,15 +986,27 @@ begin
     UrlPath := Copy(UrlPath, 1, Pos('?', UrlPath) - 1);
   if SameText(UrlPath, HOOK_PATH) then
   begin
-    // A Claude Code hook: answered at once and without a body (it would go into Claude's context).
+    // A Claude Code hook: answered without a body (it would go into Claude's context), but only once
+    // the main thread has handled it - PreToolUse must snapshot the file before Claude writes it.
     Status := 202;
-    if not FShuttingDown then
-      RunInMainLoop(
-        procedure
-        begin
+    if FShuttingDown then
+      Exit;
+    Waiter := THttpWait.Create;
+    RunInMainLoop(
+      procedure
+      begin
+        try
           if not FShuttingDown and Assigned(FOnHook) then
             FOnHook(Body);
-        end);
+        finally
+          Waiter.Answer('');
+        end;
+      end);
+    Waiter.Wait(
+      function: Boolean
+      begin
+        Result := FShuttingDown;
+      end, Result);
     Exit;
   end;
   if not SameText(UrlPath, MCP_HTTP_PATH) then
