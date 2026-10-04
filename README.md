@@ -121,7 +121,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 Or manually: *Component → Install Packages… → Add…* and pick the BPL matching the IDE bitness.
 Uninstall: `install.ps1 -Uninstall`.
 
-If Delphi is installed elsewhere: `build.bat "C:\path\to\Studio\37.0"`.
+`build.bat` finds Delphi via the registry (`RootDir` of `BDS\37.0`); to override: `build.bat "C:\path\to\Studio\37.0"`. In PowerShell run it as `.\build.bat`.
 
 Debugging in the 64-bit IDE (it debugs through lldb):
 - breakpoints and logpoints need *Project Options → Building → Delphi Compiler → Linking → Include debug information in the executable* (`DCC_DebugInfoInExe`); `debugControl` warns when it is off;

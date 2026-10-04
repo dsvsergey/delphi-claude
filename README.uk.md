@@ -121,7 +121,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 Або вручну: *Component → Install Packages… → Add…* і вкажіть BPL, що відповідає розрядності IDE.
 Видалення: `install.ps1 -Uninstall`.
 
-Якщо Delphi встановлено в іншому місці: `build.bat "C:\шлях\до\Studio\37.0"`.
+`build.bat` сам знаходить Delphi через реєстр (`RootDir` у `BDS\37.0`); інший шлях: `build.bat "C:\шлях\до\Studio\37.0"`. У PowerShell запускайте як `.\build.bat`.
 
 ## Використання
 
