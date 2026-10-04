@@ -139,7 +139,7 @@ begin
     Timeline := Check('Record Claude''s turns for the timeline and rewinding (Claude Code hooks)', Settings.Timeline);
     ContinueLast := Check('Opening the panel continues the project''s last conversation (New Session starts afresh)',
       Settings.ContinueLast);
-    StatusLine := Check('Show the session''s context use and cost in the panel (unless you have your own status line)',
+    StatusLine := Check('Show the session''s context use and cost in the panel (if no status line of your own)',
       Settings.StatusLine);
     Inc(Y, 8);
 
