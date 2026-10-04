@@ -580,6 +580,8 @@ begin
       AddLog('Lock file update failed: ' + E.Message);
   end;
   UpdateStatusIndicator(True);
+  // The Structure view is created (and may be recreated) after the package loads.
+  EnableIdeTreeDrag;
 end;
 
 procedure TClaudeCodeWizard.ClientsChanged(Sender: TObject);

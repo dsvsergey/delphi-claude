@@ -15,10 +15,14 @@ uses
   Empty when no IDE tree is dragging. }
 function IdeTreeDragItems: TArray<string>;
 
+{ The Structure view does not start drags of its own; this makes it start an OLE drag (as the
+  Project Manager does) so that its items can be dropped into the Claude panel. }
+procedure EnableIdeTreeDrag;
+
 implementation
 
 uses
-  System.Classes, System.Rtti, System.StrUtils, Vcl.Forms, ToolsAPI, ClaudeCode.Utils, ClaudeCode.PascalIndex,
+  System.Classes, System.Rtti, System.StrUtils, System.TypInfo, Vcl.Forms, ToolsAPI, ClaudeCode.Utils, ClaudeCode.PascalIndex,
   ClaudeCode.CodeTools, ClaudeCode.IdeBackend;
 
 const
@@ -197,6 +201,41 @@ begin
   except
     on E: Exception do
       Log('Reading the dragged IDE tree failed: ' + E.ClassName + ': ' + E.Message);
+  end;
+end;
+
+procedure EnableIdeTreeDrag;
+
+  procedure SetEnum(P: TRttiProperty; Tree: TComponent; const Name: string);
+  var
+    V: Integer;
+  begin
+    V := GetEnumValue(P.PropertyType.Handle, Name);
+    if V >= 0 then
+      P.SetValue(Tree, TValue.FromOrdinal(P.PropertyType.Handle, V));
+  end;
+
+var
+  Tree: TComponent;
+  Ctx: TRttiContext;
+  T: TRttiType;
+  Mode, Kind: TRttiProperty;
+begin
+  try
+    Tree := FindTree('StructureViewForm', STRUCTURE_TREE);
+    if Tree = nil then
+      Exit;
+    T := Ctx.GetType(Tree.ClassType);
+    Mode := T.GetProperty('DragMode');
+    Kind := T.GetProperty('DragType');
+    if (Mode = nil) or (Kind = nil) or (Mode.GetValue(Tree).ToString = 'dmAutomatic') then
+      Exit;
+    // It comes with dmManual and starts no drag; dropped elsewhere in the IDE, an item at most opens its unit.
+    SetEnum(Mode, Tree, 'dmAutomatic');
+    SetEnum(Kind, Tree, 'dtOLE');
+  except
+    on E: Exception do
+      Log('Structure view drag: ' + E.ClassName + ': ' + E.Message);
   end;
 end;
 
