@@ -416,13 +416,17 @@ if (want('timeline')) {
   if (confirm) {
     await clickIde(confirm.title, /Button "OK"/, 'point');
     const report = await waitFor(async () => (await ideWindows()).find(w => w.title === 'Claude Timeline: Rewind'));
-    if (report) await clickIde(report.title, /Button "OK"/, 'point');
+    // A Windows message box: its button is "OK" in the system language ("ОК" in Cyrillic).
+    if (report) await clickIde(report.title, /Button "(OK|ОК)"/, 'point');
+    await waitFor(async () => !(await ideWindows()).some(w => w.title === 'Claude Timeline: Rewind'), 5000);
+    check(!(await ideWindows()).some(w => w.title === 'Claude Timeline: Rewind'), 'the rewind report closes');
   }
   await sleep(1000);
   check(Buffer.compare(fs.readFileSync(tests), testsOrig) === 0 && !fs.existsSync(notes),
     'rewind: the edited file is back byte for byte, the new file is deleted');
   const after = await ideUi('Claude Timeline');
   check(!/e2e: change tests/.test(after), 'the rewound turn left the timeline');
+  await clickIde('Claude Timeline', /id=Close\b/);
 }
 
 if (want('prompts')) {
