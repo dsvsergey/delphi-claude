@@ -284,9 +284,12 @@ destructor TWebViewHost.Destroy;
 var
   I: Integer;
 begin
+  // Sets csDestroying now, so a window recreated while the IDE tears the dock
+  // site down does not start WebView creation again (see StartCreation).
+  Destroying;
   for I := 0 to FHandlers.Count - 1 do
     THostHandler(FHandlers[I] as TObject).FHost := nil;
-  FHandlers.Free;
+  FreeAndNil(FHandlers);
   FOnReady := nil;
   FOnMessage := nil;
   FOnError := nil;
@@ -325,7 +328,7 @@ end;
 
 procedure TWebViewHost.DestroyWnd;
 begin
-  if FController <> nil then
+  if (FController <> nil) and not (csDestroying in ComponentState) then
     FController.Set_ParentWindow(wireHWND(ParkingWindow));
   inherited;
 end;
@@ -334,7 +337,8 @@ procedure TWebViewHost.StartCreation;
 var
   Hr: HResult;
 begin
-  if FCreating or FFailed or (FController <> nil) or (csDesigning in ComponentState) then
+  if FCreating or FFailed or (FController <> nil) or
+     (ComponentState * [csDesigning, csDestroying] <> []) then
     Exit;
   if not LoadWebView2Loader then
   begin
