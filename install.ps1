@@ -2,6 +2,7 @@
 # Close RAD Studio before running.
 #   powershell -ExecutionPolicy Bypass -File install.ps1            # install
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall # remove
+[CmdletBinding()]
 param(
     [switch]$Uninstall,
     [string]$BdsVersion = '37.0'
