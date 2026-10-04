@@ -107,9 +107,25 @@ function FindForm(const Spec: string; out Ctx: TFormContext; out Err: string): B
 var
   Path, Ext: string;
   Module: IOTAModule;
-  Project: IOTAProject;
+  Group: IOTAProjectGroup;
   Info: IOTAModuleInfo;
   I: Integer;
+
+  function InProject(const Project: IOTAProject): Boolean;
+  var
+    M: Integer;
+  begin
+    Result := False;
+    if Project <> nil then
+      for M := 0 to Project.GetModuleCount - 1 do
+      begin
+        Info := Project.GetModule(M);
+        if (Info <> nil) and (Info.FormName <> '') and (SameText(Info.FormName, Spec) or SameText(Info.Name, Spec)) then
+          if MakeContext(Info.OpenModule, Ctx) then
+            Exit(True);
+      end;
+  end;
+
 begin
   Result := False;
   Err := '';
@@ -149,16 +165,14 @@ begin
        (SameText(Ctx.Root.Name, Spec) or SameText(ChangeFileExt(ExtractFileName(Module.FileName), ''), Spec)) then
       Exit(True);
   end;
-  // Modules of the active project that are not open yet.
-  Project := GetActiveProject;
-  if Project <> nil then
-    for I := 0 to Project.GetModuleCount - 1 do
-    begin
-      Info := Project.GetModule(I);
-      if (Info <> nil) and (Info.FormName <> '') and (SameText(Info.FormName, Spec) or SameText(Info.Name, Spec)) then
-        if MakeContext(Info.OpenModule, Ctx) then
-          Exit(True);
-    end;
+  // Modules that are not open yet: of the active project first, then of the rest of the group.
+  if InProject(GetActiveProject) then
+    Exit(True);
+  Group := ModuleServices.MainProjectGroup;
+  if Group <> nil then
+    for I := 0 to Group.ProjectCount - 1 do
+      if (Group.Projects[I] <> GetActiveProject) and InProject(Group.Projects[I]) then
+        Exit(True);
   Err := 'No form named ' + Spec;
 end;
 
