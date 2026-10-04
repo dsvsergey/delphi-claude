@@ -27,6 +27,7 @@ type
     FOnAddToContext: TFilesEvent;
     FOnFixBuildErrors: TNotifyEvent;
     FHasEditorFile: TFunc<Boolean>;
+    FCanExplainValue: TFunc<Boolean>;
     procedure CreateEditorMenu;
     procedure EditorActionExecute(Sender: TObject);
     procedure EditorActionUpdate(Sender: TObject);
@@ -37,6 +38,8 @@ type
     property OnEditorCommand: TEditorCommandEvent read FOnEditorCommand write FOnEditorCommand;
     property OnAddToContext: TFilesEvent read FOnAddToContext write FOnAddToContext;
     property OnFixBuildErrors: TNotifyEvent read FOnFixBuildErrors write FOnFixBuildErrors;
+    { True when "Explain This Value" can run (the debugged program is stopped). }
+    property CanExplainValue: TFunc<Boolean> read FCanExplainValue write FCanExplainValue;
   end;
 
 { The node selected in the Project Manager as a path for @-mentions (a project stands for its folder);
@@ -51,6 +54,7 @@ const
   ecTest = 'test';
   ecDoc = 'doc';
   ecAsk = 'ask';
+  ecExplainValue = 'explain-value';
 
 implementation
 
@@ -376,6 +380,7 @@ begin
   Add('Write DUnitX Test', ecTest, Sub);
   Add('Add XML Documentation', ecDoc, Sub);
   Add('Ask Claude About This...', ecAsk, Sub);
+  Add('Explain This Value (debugger)', ecExplainValue, Sub);
   (BorlandIDEServices as IOTAEditorServices).GetEditorLocalMenu.RegisterActionList(FEditorActions,
     EDITOR_MENU_CATEGORY, cEdMenuCatClipboard);
   FEditorMenuRegistered := True;
@@ -412,7 +417,11 @@ end;
 
 procedure TClaudeContextMenus.EditorActionUpdate(Sender: TObject);
 begin
-  if Sender is TCustomAction then
+  if not (Sender is TCustomAction) then
+    Exit;
+  if FCommands.Values[SenderCaption(Sender)] = ecExplainValue then
+    TCustomAction(Sender).Enabled := Assigned(FCanExplainValue) and FCanExplainValue()
+  else
     TCustomAction(Sender).Enabled := not Assigned(FHasEditorFile) or FHasEditorFile();
 end;
 

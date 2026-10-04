@@ -27,6 +27,8 @@ procedure RunInMainLoopAfter(Ms: Cardinal; const Proc: TProc);
 procedure FlushMainLoop;
 
 function PathFromUri(const S: string): string;
+{ %XX escapes (UTF-8) decoded. }
+function PercentDecode(const S: string): string;
 function PathToUri(const Path: string): string;
 function LanguageIdForFile(const FileName: string): string;
 function ReadTextFileAutoEnc(const FileName: string; out Text: string): Boolean;
@@ -34,11 +36,15 @@ function NewAuthToken: string;
 function JsonStr(Obj: TJSONObject; const Name: string; const Default: string = ''): string;
 function JsonBool(Obj: TJSONObject; const Name: string; Default: Boolean): Boolean;
 function Utf8BytesToString(const Bytes: TBytes): string;
+{ Claude Code's configuration folder (CLAUDE_CONFIG_DIR or %USERPROFILE%\.claude). }
+function ClaudeConfigDir: string;
+{ True when Claude Code has an interactive conversation recorded for Dir (what --continue continues). }
+function HasClaudeConversation(const Dir: string): Boolean;
 
 implementation
 
 uses
-  Winapi.Windows, Winapi.Messages, System.SyncObjs, System.Generics.Collections;
+  Winapi.Windows, Winapi.Messages, System.SyncObjs, System.Generics.Collections, System.IOUtils, System.Math;
 
 const
   WM_RUN_QUEUED = WM_APP + 77;
@@ -297,6 +303,49 @@ begin
     Result := 'html'
   else
     Result := 'plaintext';
+end;
+
+function ClaudeConfigDir: string;
+begin
+  Result := GetEnvironmentVariable('CLAUDE_CONFIG_DIR');
+  if Result = '' then
+    Result := TPath.Combine(GetEnvironmentVariable('USERPROFILE'), '.claude');
+end;
+
+function HasClaudeConversation(const Dir: string): Boolean;
+var
+  Key, F: string;
+  I: Integer;
+  S: TFileStream;
+  Head: TBytes;
+begin
+  // Claude Code keeps the conversations of a folder in projects\<the path with every
+  // character other than a letter or digit replaced by '-'>.
+  Key := ExcludeTrailingPathDelimiter(Dir);
+  for I := 1 to Length(Key) do
+    if not CharInSet(Key[I], ['A'..'Z', 'a'..'z', '0'..'9']) then
+      Key[I] := '-';
+  Key := TPath.Combine(TPath.Combine(ClaudeConfigDir, 'projects'), Key);
+  Result := False;
+  if not TDirectory.Exists(Key) then
+    Exit;
+  // Sessions of claude -p and the SDKs are kept there too, but --continue skips them: only an
+  // interactive one counts. The marker is in the first records, so the head of the file is enough.
+  for F in TDirectory.GetFiles(Key, '*.jsonl') do
+    try
+      S := TFileStream.Create(F, fmOpenRead or fmShareDenyNone);
+      try
+        SetLength(Head, Min(S.Size, 65536));
+        if Length(Head) > 0 then
+          S.ReadBuffer(Head[0], Length(Head));
+      finally
+        S.Free;
+      end;
+      if Pos('"entrypoint":"cli"', TEncoding.UTF8.GetString(Head)) > 0 then
+        Exit(True);
+    except
+      on EStreamError do ; // being written or locked: try the others
+    end;
 end;
 
 function Utf8BytesToString(const Bytes: TBytes): string;

@@ -136,11 +136,11 @@ const
   Tail = '\s*(?:\[[^\[\]]*\])?\s*$';
 begin
   ReLocated := TRegEx.Create(
-    '^\s*(?<file>[^\s(][^(]*?)\((?<line>\d+)(?:,(?<col>\d+))?\)\s*:\s*' +
+    '^\s*(?<file>[^\s(].*?)\((?<line>\d+)(?:,(?<col>\d+))?\)\s*:\s*' +
     '(?<kind>fatal error|error|hint warning|warning|hint)\s+(?<code>[A-Za-z]+\d+)\s*:\s*(?<text>.*?)' + Tail,
     [roIgnoreCase]);
   ReDcc := TRegEx.Create(
-    '^\s*(?<file>[^\s(][^(]*?)\((?<line>\d+)(?:,(?<col>\d+))?\)\s+' +
+    '^\s*(?<file>[^\s(].*?)\((?<line>\d+)(?:,(?<col>\d+))?\)\s+' +
     '(?<kind>Fatal|Error|Warning|Hint):\s*(?<code>[A-Z]\d+)\s+(?<text>.*?)\s*$',
     [roIgnoreCase]);
   ReUnlocated := TRegEx.Create(

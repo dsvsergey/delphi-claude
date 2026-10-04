@@ -19,6 +19,8 @@ type
     SubmitRequests: Boolean;  // context menu requests are sent right away
     Timeline: Boolean;        // record Claude's turns through hooks (--settings)
     InlineDiff: Boolean;      // show proposed changes in the code editor instead of the diff window
+    ContinueLast: Boolean;    // a session started without New Session continues the folder's last conversation
+    StatusLine: Boolean;      // the session's model, context and cost in the panel (Claude Code status line)
     { Arguments added to the claude command line (without --mcp-config). }
     function CommandArgs: string;
   end;
@@ -63,7 +65,7 @@ var
   Y: Integer;
   PanelCmd, ConsoleCmd, Extra: TEdit;
   Model, Mode: TComboBox;
-  Tools, Sync, Submit, Timeline, InlineDiff: TCheckBox;
+  Tools, Sync, Submit, Timeline, InlineDiff, ContinueLast, StatusLine: TCheckBox;
   Ok, Cancel: TButton;
 
   procedure Caption(const Text: string);
@@ -135,6 +137,10 @@ begin
     InlineDiff := Check('Show Claude''s proposed changes in the code editor (otherwise in a diff window)',
       Settings.InlineDiff);
     Timeline := Check('Record Claude''s turns for the timeline and rewinding (Claude Code hooks)', Settings.Timeline);
+    ContinueLast := Check('Opening the panel continues the project''s last conversation (New Session starts afresh)',
+      Settings.ContinueLast);
+    StatusLine := Check('Show the session''s context use and cost in the panel (if no status line of your own)',
+      Settings.StatusLine);
     Inc(Y, 8);
 
     Cancel := TButton.Create(F);
@@ -166,6 +172,8 @@ begin
       Settings.SubmitRequests := Submit.Checked;
       Settings.InlineDiff := InlineDiff.Checked;
       Settings.Timeline := Timeline.Checked;
+      Settings.ContinueLast := ContinueLast.Checked;
+      Settings.StatusLine := StatusLine.Checked;
     end;
   finally
     F.Free;

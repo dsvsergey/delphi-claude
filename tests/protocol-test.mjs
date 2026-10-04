@@ -145,7 +145,7 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
     'http: every tool has a schema and a description');
   h = await post({ jsonrpc: '2.0', id: 6, method: 'prompts/list' });
   const pn = h.json.result.prompts.map(p => p.name);
-  check(['make-tests-pass','hunt-bug','screenshot-to-form','crud-form','modernize','explain-architecture'].every(n => pn.includes(n)),
+  check(['make-tests-pass','hunt-bug','screenshot-to-form','crud-form','modernize','explain-architecture','review-changes','commit-message'].every(n => pn.includes(n)),
     `http: prompts/list (${pn.join(', ')})`);
   h = await post({ jsonrpc: '2.0', id: 7, method: 'prompts/get', params: { name: 'modernize', arguments: { scenario: 'win64' } } });
   check(h.json.result.messages[0].content.text.includes('analyzeModernization'), 'http: prompts/get renders arguments');
@@ -156,6 +156,10 @@ async function post(body, auth = token, path = '/mcp', method = 'POST') {
   check(h.status === 202 && h.text === '', 'http: /hook -> 202 without a body');
   h = await post({ hook_event_name: 'Stop' }, 'wrong', '/hook');
   check(h.status === 401, 'http: /hook needs the token');
+  h = await post({ model: { display_name: 'Opus' } }, token, '/statusline');
+  check(h.status === 200, 'http: /statusline answers');
+  h = await post({}, 'wrong', '/statusline');
+  check(h.status === 401, 'http: /statusline needs the token');
   h = await post(null, token, '/mcp', 'GET');
   check(h.status === 405, 'http: GET -> 405');
   h = await post({ jsonrpc: '2.0', id: 5, method: 'ping' }, token, '/other');

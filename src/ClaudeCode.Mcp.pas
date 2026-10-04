@@ -47,6 +47,9 @@ type
     FMcpConfigFile: string;
     FHookSettingsFile: string;
     FOnHook: TProc<string>;
+    FOnStatusLine: TFunc<string, string>;
+    FSettingsHooks: Boolean;
+    FSettingsStatusLine: Boolean;
     FLockFolders: string;
     FShuttingDown: Boolean;
     FOnClientsChanged: TNotifyEvent;
@@ -70,6 +73,8 @@ type
     function Running: Boolean;
     procedure RefreshLockFile;
     procedure Notify(const Method: string; Params: TJSONObject);
+    { What the --settings file gives Claude Code: the hooks (timeline) and/or the status line. }
+    procedure SetClaudeSettings(Hooks, StatusLine: Boolean);
     function ClientCount: Integer;
     function Port: Integer;
     property LockFile: string read FLockFile;
@@ -79,6 +84,8 @@ type
     property HookSettingsFile: string read FHookSettingsFile;
     { Called in the main thread with the JSON of each hook event. }
     property OnHook: TProc<string> read FOnHook write FOnHook;
+    { Called in the main thread with the status line JSON of a session; returns the line Claude Code shows. }
+    property OnStatusLine: TFunc<string, string> read FOnStatusLine write FOnStatusLine;
     property OnClientsChanged: TNotifyEvent read FOnClientsChanged write FOnClientsChanged;
   end;
 
@@ -98,17 +105,13 @@ const
   MCP_HTTP_PATH = '/mcp';
   MCP_CONFIG_NAME = 'delphi-mcp.json';
   HOOK_PATH = '/hook';
+  STATUSLINE_PATH = '/statusline';
   HOOK_SETTINGS_SUFFIX = '.delphi-settings.json';
   DEFAULT_PROTOCOL = '2025-03-26';
 
 function ClaudeIdeLockDir: string;
-var
-  Base: string;
 begin
-  Base := GetEnvironmentVariable('CLAUDE_CONFIG_DIR');
-  if Base = '' then
-    Base := TPath.Combine(GetEnvironmentVariable('USERPROFILE'), '.claude');
-  Result := TPath.Combine(Base, 'ide');
+  Result := TPath.Combine(ClaudeConfigDir, 'ide');
 end;
 
 { TToolResult }
@@ -528,9 +531,13 @@ begin
   Result.Add(Tool('findReferences',
     'Find every use of an identifier in the project''s Delphi sources and text forms (.pas, .dpr, .inc, .dfm, ' +
     '.fmx: event handlers and component names too), outside comments and strings, with the line text and the ' +
-    'qualifier (Customer.Save). Matching is by name, not by type: same-named members of other classes match too.',
+    'qualifier (Customer.Save). The occurrences found by name are then checked by DelphiLSP (the compiler) and ' +
+    'grouped by the declaration each one refers to (TOrder.Save vs TCustomer.Save); what it cannot resolve (form ' +
+    'files, other projects) is listed apart.',
     Schema([
       TJSONPair.Create('name', Prop('string', 'Identifier; for TOrder.Save the name Save is searched')),
+      TJSONPair.Create('resolve', Prop('boolean', 'Check the occurrences with DelphiLSP (default true); false: ' +
+        'name matching only, faster')),
       TJSONPair.Create('files', ArrayProp('Only these files (paths or unit names); default: the project group')),
       TJSONPair.Create('maxResults', Prop('number', 'Default 300'))],
       ['name'])));
@@ -545,6 +552,8 @@ begin
       TJSONPair.Create('newName', Prop('string', 'New identifier')),
       TJSONPair.Create('files', ArrayProp('Only these files (paths or unit names); default: the project group')),
       TJSONPair.Create('dryRun', Prop('boolean', 'Only list the occurrences (default true)')),
+      TJSONPair.Create('declaration', Prop('string', 'Rename only the uses of this declaration, as findReferences ' +
+        'names it ("OrderLogic.pas:20"); DelphiLSP checks each occurrence')),
       TJSONPair.Create('only', ArrayProp('Occurrence ids from the dry run to change'))],
       ['name', 'newName'])));
 
@@ -585,6 +594,7 @@ constructor TMcpServer.Create(const Backend: IIdeBackend);
 begin
   inherited Create;
   FBackend := Backend;
+  FSettingsHooks := True;
 end;
 
 destructor TMcpServer.Destroy;
@@ -768,11 +778,22 @@ begin
   // to Claude's context; "|| exit 0" (cmd and bash alike) keeps Claude going when the IDE is gone.
   Cmd := Format('curl -s -m 5 -X POST -H "Authorization: Bearer %s" -H "Content-Type: application/json" ' +
     '--data-binary @- http://127.0.0.1:%d%s || exit 0', [FToken, FWs.Port, HOOK_PATH]);
-  Hooks := TJSONObject.Create;
-  Hooks.AddPair('UserPromptSubmit', Entry(''));
-  Hooks.AddPair('PreToolUse', Entry('Edit|Write|MultiEdit|NotebookEdit'));
-  Hooks.AddPair('Stop', Entry(''));
-  Root := TJSONObject.Create.AddPair('hooks', Hooks);
+  Root := TJSONObject.Create;
+  if FSettingsHooks then
+  begin
+    Hooks := TJSONObject.Create;
+    Hooks.AddPair('UserPromptSubmit', Entry(''));
+    Hooks.AddPair('PreToolUse', Entry('Edit|Write|MultiEdit|NotebookEdit'));
+    Hooks.AddPair('Stop', Entry(''));
+    Root.AddPair('hooks', Hooks);
+  end;
+  // The status line: the session's model, context and cost go to the IDE, which answers the text
+  // Claude Code shows in its own status row.
+  if FSettingsStatusLine then
+    Root.AddPair('statusLine', TJSONObject.Create
+      .AddPair('type', 'command')
+      .AddPair('command', Format('curl -s -m 2 -X POST -H "Authorization: Bearer %s" -H "Content-Type: application/json" ' +
+        '--data-binary @- http://127.0.0.1:%d%s || exit 0', [FToken, FWs.Port, STATUSLINE_PATH])));
   try
     // Settings of IDEs that ended without cleaning up (no lock file for that port any more).
     for Old in TDirectory.GetFiles(ClaudeIdeLockDir, '*' + HOOK_SETTINGS_SUFFIX) do
@@ -784,6 +805,16 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TMcpServer.SetClaudeSettings(Hooks, StatusLine: Boolean);
+begin
+  if (Hooks = FSettingsHooks) and (StatusLine = FSettingsStatusLine) then
+    Exit;
+  FSettingsHooks := Hooks;
+  FSettingsStatusLine := StatusLine;
+  if Running then
+    WriteHookSettings;
 end;
 
 procedure TMcpServer.ClientsChanged;
@@ -1000,6 +1031,32 @@ begin
             FOnHook(Body);
         finally
           Waiter.Answer('');
+        end;
+      end);
+    Waiter.Wait(
+      function: Boolean
+      begin
+        Result := FShuttingDown;
+      end, Result);
+    Exit;
+  end;
+  if SameText(UrlPath, STATUSLINE_PATH) then
+  begin
+    // The status line command of a session: the answer is the text Claude Code shows.
+    if FShuttingDown then
+      Exit;
+    Waiter := THttpWait.Create;
+    RunInMainLoop(
+      procedure
+      var
+        Line: string;
+      begin
+        Line := '';
+        try
+          if not FShuttingDown and Assigned(FOnStatusLine) then
+            Line := FOnStatusLine(Body);
+        finally
+          Waiter.Answer(Line);
         end;
       end);
     Waiter.Wait(

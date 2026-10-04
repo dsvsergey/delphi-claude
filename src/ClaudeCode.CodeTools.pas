@@ -13,6 +13,12 @@ function ToolGetUnitOutline(Args: TJSONObject): TToolResult;
 function ToolFindSymbol(Args: TJSONObject): TToolResult;
 function ToolFindReferences(Args: TJSONObject): TToolResult;
 function ToolRenameSymbol(Args: TJSONObject): TToolResult;
+{ The same, with each occurrence checked by DelphiLSP: findReferences groups them by the declaration they
+  refer to, renameSymbol with "declaration" changes the uses of that one. Fall back to names alone. }
+procedure ToolFindReferencesAsync(Args: TJSONObject; const Done: TToolDone);
+procedure ToolRenameSymbolAsync(Args: TJSONObject; const Done: TToolDone);
+{ Stops the DelphiLSP process and a running check. }
+procedure ShutdownCodeTools;
 
 { Source files of the project group and its folders (.pas, .dpr, .dpk, .inc and, with Forms,
   .dfm/.fmx), at most MaxFiles. }
@@ -27,8 +33,8 @@ function ProjectMapSources(const ProjectName: string): TArray<TMapSource>;
 implementation
 
 uses
-  Winapi.Windows, System.IOUtils, System.StrUtils, System.Generics.Collections, ToolsAPI,
-  ClaudeCode.Utils, ClaudeCode.IdeBackend, ClaudeCode.TextSync;
+  Winapi.Windows, System.IOUtils, System.StrUtils, System.Generics.Collections, System.DateUtils, System.Win.Registry,
+  ToolsAPI, ClaudeCode.Utils, ClaudeCode.IdeBackend, ClaudeCode.TextSync, ClaudeCode.DelphiLsp, ClaudeCode.Process;
 
 const
   SKIP_DIRS: array[0..17] of string = ('__history', '__recovery', '.git', '.svn', '.hg', 'win32', 'win64',
@@ -691,8 +697,563 @@ begin
   end;
 end;
 
+{ Occurrences checked by DelphiLSP: which declaration each one refers to }
+
+type
+  TResolvedOcc = record
+    FileIndex: Integer;  // into the occurrences per file
+    Occ: TPasOccurrence;
+    Decl: TLspLocation;  // Line = 0: not resolved
+  end;
+  TResolvedDone = reference to procedure(const Resolved: TArray<TResolvedOcc>; const Note: string);
+
+var
+  Lsp: TDelphiLsp;          // used by LspRunner's thread only
+  LspRunner: TJobRunner;
+
+const
+  MAX_RESOLVED = 600;
+  RESOLVE_SECONDS = 90;
+
+{ A project or library path with $(BDS), $(Platform), $(Config) and other environment macros expanded;
+  '' when a macro is unknown. }
+function ExpandMacros(const S, Platform, Config: string): string;
+var
+  I, J: Integer;
+  Name, V: string;
+begin
+  Result := S;
+  I := Pos('$(', Result);
+  while I > 0 do
+  begin
+    J := PosEx(')', Result, I);
+    if J = 0 then
+      Break;
+    Name := Copy(Result, I + 2, J - I - 2);
+    if SameText(Name, 'Platform') then
+      V := Platform
+    else if SameText(Name, 'Config') then
+      V := Config
+    else
+      V := GetEnvironmentVariable(Name);
+    if V = '' then
+      Exit('');
+    Result := Copy(Result, 1, I - 1) + V + Copy(Result, J + 1, MaxInt);
+    I := PosEx('$(', Result, I + Length(V));
+  end;
+end;
+
+{ The existing folders of a ';' list, absolute (relative ones are relative to BaseDir). }
+function PathList(const Value, BaseDir, Platform, Config: string): TArray<string>;
+var
+  P, S: string;
+begin
+  Result := nil;
+  for P in Value.Split([';']) do
+  begin
+    S := ExpandMacros(Trim(P), Platform, Config);
+    if S = '' then
+      Continue;
+    if not TPath.IsPathRooted(S) then
+      S := TPath.Combine(BaseDir, S);
+    S := ExcludeTrailingPathDelimiter(ExpandFileName(S));
+    if DirectoryExists(S) and (IndexText(S, Result) < 0) then
+      Result := Result + [S];
+  end;
+end;
+
+function ProjectConfigValue(const P: IOTAProject; const Name: string): string;
+var
+  Configs: IOTAProjectOptionsConfigurations;
+  Cfg: IOTABuildConfiguration;
+begin
+  Result := '';
+  if Supports(P.ProjectOptions, IOTAProjectOptionsConfigurations, Configs) and
+     (Configs.ActiveConfiguration <> nil) then
+  begin
+    Cfg := Configs.ActiveConfiguration.PlatformConfiguration[P.CurrentPlatform];
+    if Cfg = nil then
+      Cfg := Configs.ActiveConfiguration;
+    Result := Cfg.GetValue(Name, True);
+  end;
+end;
+
+function IdeLibraryPath(const Platform: string): string;
+var
+  Reg: TRegistry;
+begin
+  Result := '';
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKeyReadOnly((BorlandIDEServices as IOTAServices).GetBaseRegistryKey + '\Library\' + Platform) and
+       Reg.ValueExists('Search Path') then
+      Result := Reg.ReadString('Search Path');
+  finally
+    Reg.Free;
+  end;
+end;
+
+function QuotedList(const Paths: TArray<string>): string;
+var
+  P: string;
+begin
+  Result := '';
+  for P in Paths do
+  begin
+    if Result <> '' then
+      Result := Result + ';';
+    Result := Result + '"' + P + '"';
+  end;
+end;
+
+{ DelphiLSP's settings for the active project: the compiler, its options, the project's units. }
+function LspSetup(out Exe, RootDir: string; out Settings: TJSONObject; out Why: string): Boolean;
+var
+  Project: IOTAProject;
+  Platform, Config, Dir, Dll, Opts, S: string;
+  Units, Includes: TArray<string>;
+  Files: TJSONArray;
+  I: Integer;
+  MI: IOTAModuleInfo;
+begin
+  Result := False;
+  Settings := nil;
+  Why := '';
+  Project := GetActiveProject;
+  if Project = nil then
+  begin
+    Why := 'no active project';
+    Exit;
+  end;
+  Exe := ExtractFilePath(ParamStr(0)) + 'DelphiLSP.exe';
+  if not FileExists(Exe) then
+  begin
+    Why := 'DelphiLSP.exe was not found next to the IDE';
+    Exit;
+  end;
+  Platform := Project.CurrentPlatform;
+  if Platform = '' then
+    Platform := 'Win32';
+  if not (SameText(Platform, 'Win32') or SameText(Platform, 'Win64')) then
+  begin
+    Why := 'the active platform ' + Platform + ' is not checked (Win32 and Win64 are)';
+    Exit;
+  end;
+  Config := Project.CurrentConfiguration;
+  Dll := Format('dcc%s%d.dll', [IfThen(SameText(Platform, 'Win64'), '64', '32'), Round(CompilerVersion * 10)]);
+  Dir := ExtractFilePath(Project.FileName);
+  Units := PathList(ProjectConfigValue(Project, 'DCC_UnitSearchPath'), Dir, Platform, Config) +
+    PathList(IdeLibraryPath(Platform), Dir, Platform, Config) +
+    PathList('$(BDS)\lib\' + LowerCase(Platform) + '\release', Dir, Platform, Config);
+  Includes := PathList(ProjectConfigValue(Project, 'DCC_IncludePath'), Dir, Platform, Config);
+  Opts := '-$D+';
+  S := ProjectConfigValue(Project, 'DCC_Define');
+  if S <> '' then
+    Opts := Opts + ' -D' + S;
+  S := ProjectConfigValue(Project, 'DCC_Namespace');
+  if S <> '' then
+    Opts := Opts + ' -NS' + S;
+  if Length(Units) > 0 then
+    Opts := Opts + ' -U' + QuotedList(Units) + ' -R' + QuotedList(Units);
+  if Length(Includes) > 0 then
+    Opts := Opts + ' -I' + QuotedList(Includes);
+  Files := TJSONArray.Create;
+  for I := 0 to Project.GetModuleCount - 1 do
+  begin
+    MI := Project.GetModule(I);
+    if (MI <> nil) and SameText(ExtractFileExt(MI.FileName), '.pas') then
+      Files.Add(TJSONObject.Create.AddPair('name', ChangeFileExt(ExtractFileName(MI.FileName), ''))
+        .AddPair('file', LspUri(MI.FileName)));
+  end;
+  Settings := TJSONObject.Create;
+  Settings.AddPair('project', LspUri(Project.FileName));
+  Settings.AddPair('dllname', Dll);
+  Settings.AddPair('dccOptions', Opts);
+  Settings.AddPair('projectFiles', Files);
+  Settings.AddPair('includeDCUsInUsesCompletion', TJSONBool.Create(False));
+  Settings.AddPair('enableKeyWordCompletion', TJSONBool.Create(False));
+  Settings.AddPair('browsingPaths', TJSONArray.Create);
+  RootDir := Dir;
+  Result := True;
+end;
+
+{ Asks DelphiLSP where each occurrence is declared, in the background; Done runs in the main thread. }
+procedure ResolveOccurrences(const All: TArray<TFileOccurrences>; const Done: TResolvedDone);
+var
+  Exe, RootDir, Why, Key: string;
+  Settings: TJSONObject;
+  Resolved: TArray<TResolvedOcc>;
+  Note: string;
+begin
+  if LspRunner.Busy then
+  begin
+    Done(nil, 'another check by DelphiLSP is still running');
+    Exit;
+  end;
+  if not LspSetup(Exe, RootDir, Settings, Why) then
+  begin
+    Done(nil, Why);
+    Exit;
+  end;
+  Key := Exe + '|' + Settings.ToJSON;
+  Resolved := nil;
+  Note := '';
+  LspRunner.Start(
+    procedure(const Cancelled: TFunc<Boolean>)
+    var
+      I, Count: Integer;
+      O: TPasOccurrence;
+      R: TResolvedOcc;
+      Deadline: TDateTime;
+      Err: string;
+      Checking: Boolean;
+    begin
+      // Another DelphiLSP.exe (the 64-bit IDE has its own): a new client.
+      if (Lsp <> nil) and (Lsp.ConfigKey <> '') and not Lsp.ConfigKey.StartsWith(Exe + '|') then
+        FreeAndNil(Lsp);
+      if Lsp = nil then
+        Lsp := TDelphiLsp.Create(Exe);
+      if not Lsp.Running or (Lsp.ConfigKey <> Key) then
+        if not Lsp.Start(RootDir, Settings, Key, Err) then
+          Note := Err;
+      Checking := Note = '';
+      Count := 0;
+      Deadline := IncSecond(Now, RESOLVE_SECONDS);
+      for I := 0 to High(All) do
+      begin
+        if Cancelled() then
+          Exit;
+        if Checking and IsPascalFile(All[I].FileName) then
+          Lsp.OpenText(All[I].FileName, All[I].Text);
+        for O in All[I].Occ do
+        begin
+          R := Default(TResolvedOcc);
+          R.FileIndex := I;
+          R.Occ := O;
+          if Checking and IsPascalFile(All[I].FileName) then
+            if (Count >= MAX_RESOLVED) or (Now > Deadline) then
+              Note := Format('only the first %d occurrences were checked', [Count])
+            else
+            begin
+              // A character inside the name (the first one may be '&').
+              R.Decl := Lsp.Definition(All[I].FileName, O.Line, O.Col + Ord(O.Len > 1));
+              Inc(Count);
+            end;
+          Resolved := Resolved + [R];
+        end;
+      end;
+    end,
+    procedure
+    begin
+      Settings.Free;
+      Done(Resolved, Note);
+    end);
+end;
+
+{ "OrderLogic.pas:20" as renameSymbol takes it back. }
+function DeclSpec(const L: TLspLocation): string;
+begin
+  if TPath.IsPathRooted(L.FileName) then
+    Result := RelName(L.FileName) + ':' + IntToStr(L.Line)
+  else
+    Result := L.FileName + ':' + IntToStr(L.Line);
+end;
+
+{ The parameter list of a signature, for telling overloads apart: "(const a: string)" -> "(consta:string)". }
+function ParamsOf(const Signature: string): string;
+var
+  A, B: Integer;
+begin
+  A := Pos('(', Signature);
+  B := Signature.LastIndexOf(')') + 1;
+  if (A = 0) or (B < A) then
+    Exit('');
+  Result := LowerCase(Copy(Signature, A, B - A + 1)).Replace(' ', '');
+end;
+
+type
+  TSymbolInfo = record
+    Key: string;       // the same for a method's declaration and its implementation
+    Title: string;     // "method TOrder.Save (OrderLogic.pas:11)"
+    IsBody: Boolean;   // the location is an implementation (methodImpl or a routine body)
+  end;
+
+{ What a definition location stands for. DelphiLSP sends a declaration in the class to the method
+  body and the body back to the declaration, so both are one symbol: file, qualified name and
+  parameters (overloads stay apart). }
+function SymbolAt(const L: TLspLocation): TSymbolInfo;
+var
+  Info: TPasUnitInfo;
+  D: TPasDecl;
+begin
+  Result.Key := AnsiLowerCase(L.FileName) + ':' + IntToStr(L.Line);
+  Result.Title := DeclSpec(L);
+  Result.IsBody := False;
+  if not (TPath.IsPathRooted(L.FileName) and FileExists(L.FileName) and UnitInfoOf(L.FileName, Info)) then
+    Exit;
+  for D in Info.Decls do
+    if D.Line = L.Line then
+    begin
+      Result.Title := Format('%s %s (%s)', [D.KindName, D.QualifiedName, DeclSpec(L)]);
+      if D.Kind in [pdMethod, pdMethodImpl, pdRoutine] then
+      begin
+        Result.Key := AnsiLowerCase(L.FileName) + '|' + LowerCase(D.QualifiedName) + '|' + ParamsOf(D.Signature);
+        Result.IsBody := (D.Kind = pdMethodImpl) or ((D.Kind = pdRoutine) and SameText(D.Section, 'implementation'));
+      end;
+      Exit;
+    end;
+end;
+
+{ The symbol of a "file:line" spec among the locations found (the file may be given by name only). }
+function SpecSymbol(const Spec: string; const Resolved: TArray<TResolvedOcc>; out Sym: TSymbolInfo): Boolean;
+var
+  P, Line: Integer;
+  F: string;
+  R: TResolvedOcc;
+  L: TLspLocation;
+  Info: TPasUnitInfo;
+  D: TPasDecl;
+begin
+  Result := False;
+  P := Spec.LastIndexOf(':');
+  if P <= 0 then
+    Exit;
+  Line := StrToIntDef(Copy(Spec, P + 2, MaxInt), -1);
+  F := ExtractFileName(Copy(Spec, 1, P).Replace('/', '\'));
+  // A location DelphiLSP gave (declaration or body), or a declaration line of a file it points into.
+  for R in Resolved do
+    if (R.Decl.Line > 0) and SameText(ExtractFileName(R.Decl.FileName), F) then
+    begin
+      L := R.Decl;
+      L.Line := Line;
+      if TPath.IsPathRooted(L.FileName) and UnitInfoOf(L.FileName, Info) then
+        for D in Info.Decls do
+          if D.Line = Line then
+          begin
+            Sym := SymbolAt(L);
+            Exit(True);
+          end;
+      if R.Decl.Line = Line then
+      begin
+        Sym := SymbolAt(L);
+        Exit(True);
+      end;
+    end;
+end;
+
+procedure ToolFindReferencesAsync(Args: TJSONObject; const Done: TToolDone);
+var
+  Name: string;
+  All: TArray<TFileOccurrences>;
+  Max: Integer;
+begin
+  Name := SimpleName(JsonStr(Args, 'name'));
+  if not JsonBool(Args, 'resolve', True) or not IsValidIdentifier(Name) then
+  begin
+    Done(ToolFindReferences(Args));
+    Exit;
+  end;
+  Max := IntArg(Args, 'maxResults', 300);
+  All := CollectOccurrences(Args, Name);
+  if Length(All) = 0 then
+  begin
+    Done(ToolFindReferences(Args));
+    Exit;
+  end;
+  ResolveOccurrences(All,
+    procedure(const Resolved: TArray<TResolvedOcc>; const Note: string)
+    var
+      Groups: TDictionary<string, TList<Integer>>;
+      Titles, Specs: TDictionary<string, string>;
+      Order: TList<string>;
+      Unresolved: TList<Integer>;
+      I, J, Count, Checked: Integer;
+      K, T: string;
+      Sym: TSymbolInfo;
+      SB: TStringBuilder;
+
+      procedure Line(Index: Integer);
+      var
+        R: TResolvedOcc;
+      begin
+        R := Resolved[Index];
+        if Count >= Max then
+          Exit;
+        Inc(Count);
+        SB.AppendFormat('  %s  %s', [OccurrenceId(All[R.FileIndex].FileName, R.Occ),
+          Trim(SourceLine(All[R.FileIndex].Text, R.Occ.Line))]).AppendLine;
+      end;
+
+    begin
+      if Length(Resolved) = 0 then
+      begin
+        // DelphiLSP could not run: matching by name, with the reason.
+        Done(TToolResult.Ok([ToolFindReferences(Args).Texts[0] + sLineBreak +
+          '(Not checked by DelphiLSP: ' + Note + '.)']));
+        Exit;
+      end;
+      Groups := TDictionary<string, TList<Integer>>.Create;
+      Titles := TDictionary<string, string>.Create;
+      Specs := TDictionary<string, string>.Create;
+      Order := TList<string>.Create;
+      Unresolved := TList<Integer>.Create;
+      SB := TStringBuilder.Create;
+      try
+        Checked := 0;
+        for I := 0 to High(Resolved) do
+          if Resolved[I].Decl.Line = 0 then
+            Unresolved.Add(I)
+          else
+          begin
+            Inc(Checked);
+            Sym := SymbolAt(Resolved[I].Decl);
+            K := Sym.Key;
+            if not Groups.ContainsKey(K) then
+            begin
+              Groups.Add(K, TList<Integer>.Create);
+              Order.Add(K);
+            end;
+            Groups[K].Add(I);
+            // The declaration names the group better than the body.
+            if not Titles.ContainsKey(K) or not Sym.IsBody then
+            begin
+              Titles.AddOrSetValue(K, Sym.Title);
+              Specs.AddOrSetValue(K, DeclSpec(Resolved[I].Decl));
+            end;
+          end;
+        SB.AppendFormat('%d occurrence(s) of %s; DelphiLSP (the compiler) resolved %d of them to %d declaration(s). ' +
+          'To rename the uses of one declaration only, call renameSymbol with "declaration" set to its file:line.',
+          [Length(Resolved), Name, Checked, Order.Count]).AppendLine;
+        Count := 0;
+        for K in Order do
+        begin
+          T := Titles[K];
+          SB.AppendLine.AppendFormat('%s - %d occurrence(s), declaration "%s"', [T, Groups[K].Count, Specs[K]])
+            .AppendLine;
+          for J in Groups[K] do
+            Line(J);
+        end;
+        if Unresolved.Count > 0 then
+        begin
+          SB.AppendLine.AppendFormat('Not resolved - %d occurrence(s) (form files, other projects, or code the ' +
+            'compiler could not read; check them by hand):', [Unresolved.Count]).AppendLine;
+          for J in Unresolved do
+            Line(J);
+        end;
+        if Count < Length(Resolved) then
+          SB.AppendFormat('... %d more (raise maxResults or pass "files")', [Length(Resolved) - Count]).AppendLine;
+        if Note <> '' then
+          SB.Append('Note: ').Append(Note).AppendLine;
+        Done(TToolResult.Ok([SB.ToString]));
+      finally
+        SB.Free;
+        Unresolved.Free;
+        for K in Order do
+          Groups[K].Free;
+        Order.Free;
+        Specs.Free;
+        Titles.Free;
+        Groups.Free;
+      end;
+    end);
+end;
+
+procedure ToolRenameSymbolAsync(Args: TJSONObject; const Done: TToolDone);
+var
+  Name, Spec: string;
+  All: TArray<TFileOccurrences>;
+  ArgsCopy: TJSONObject;
+begin
+  Spec := Trim(JsonStr(Args, 'declaration'));
+  Name := SimpleName(JsonStr(Args, 'name'));
+  if (Spec = '') or not IsValidIdentifier(Name) then
+  begin
+    Done(ToolRenameSymbol(Args));
+    Exit;
+  end;
+  All := CollectOccurrences(Args, Name);
+  ArgsCopy := Args.Clone as TJSONObject;
+  ResolveOccurrences(All,
+    procedure(const Resolved: TArray<TResolvedOcc>; const Note: string)
+    var
+      Ids: TJSONArray;
+      Other: TStringList;
+      R: TResolvedOcc;
+      V: TJSONValue;
+      Target: TSymbolInfo;
+      Res: TToolResult;
+      Extra, T: string;
+    begin
+      Other := TStringList.Create;
+      try
+        if Length(Resolved) = 0 then
+        begin
+          Done(TToolResult.Error('The occurrences could not be checked by DelphiLSP (' + Note + '). Run ' +
+            'renameSymbol without "declaration" (dry run) and pass the ids to change in "only".'));
+          Exit;
+        end;
+        if not SpecSymbol(Spec, Resolved, Target) then
+        begin
+          Done(TToolResult.Error(Format('No occurrence of %s refers to the declaration %s. Call findReferences ' +
+            'to see the declarations DelphiLSP found.', [Name, Spec])));
+          Exit;
+        end;
+        Ids := TJSONArray.Create;
+        for R in Resolved do
+          if (R.Decl.Line > 0) and (SymbolAt(R.Decl).Key = Target.Key) then
+            Ids.Add(OccurrenceId(All[R.FileIndex].FileName, R.Occ))
+          else if R.Decl.Line = 0 then
+            Other.Add(OccurrenceId(All[R.FileIndex].FileName, R.Occ));
+        // Ids the caller adds by hand (form files, unresolved code) count too.
+        if ArgsCopy.GetValue('only') is TJSONArray then
+          for V in TJSONArray(ArgsCopy.GetValue('only')) do
+            Ids.Add(V.Value);
+        if Ids.Count = 0 then
+        begin
+          Ids.Free;
+          Done(TToolResult.Error(Format('No occurrence of %s refers to the declaration %s.', [Name, Spec])));
+          Exit;
+        end;
+        ArgsCopy.RemovePair('only').Free;
+        ArgsCopy.AddPair('only', Ids);
+        Res := ToolRenameSymbol(ArgsCopy);
+        Extra := Format('DelphiLSP: %d occurrence(s) refer to %s.', [Ids.Count, Target.Title]);
+        if Other.Count > 0 then
+          Extra := Extra + Format(' %d could not be resolved and are not included: %s. Add the ones that belong ' +
+            'to it in "only".', [Other.Count, string.Join(', ', Other.ToStringArray)]);
+        if Note <> '' then
+          Extra := Extra + ' Note: ' + Note + '.';
+        if Res.IsError then
+        begin
+          Done(Res);
+          Exit;
+        end;
+        T := Res.Texts[0];
+        // The dry run's own header speaks of matching by name: here the compiler chose.
+        if JsonBool(ArgsCopy, 'dryRun', True) and (Pos(sLineBreak + sLineBreak, T) > 0) then
+          T := Format('Dry run: renaming the uses of %s to %s would change these occurrences (each one checked ' +
+            'by DelphiLSP). Call renameSymbol again with dryRun=false and the same "declaration".',
+            [Target.Title, JsonStr(ArgsCopy, 'newName')]) + Copy(T, Pos(sLineBreak + sLineBreak, T), MaxInt);
+        Done(TToolResult.Ok([T + sLineBreak + Extra]));
+      finally
+        Other.Free;
+        ArgsCopy.Free;
+      end;
+    end);
+end;
+
+procedure ShutdownCodeTools;
+begin
+  LspRunner.Cancel;
+  FreeAndNil(Lsp);
+end;
+
 initialization
   Cache := TDictionary<string, TCachedUnit>.Create;
+  LspRunner := TJobRunner.Create;
 finalization
+  LspRunner.Free;
+  Lsp.Free;
   Cache.Free;
 end.

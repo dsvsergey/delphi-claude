@@ -379,6 +379,7 @@ begin
   FDb.Cancel;
   FSync.Enabled := False;
   ShutdownDebugTools;
+  ShutdownCodeTools; // the DelphiLSP process
 end;
 
 function TDelphiIdeBackend.IdeName: string;
@@ -555,6 +556,10 @@ begin
     ToolPasteDfm(Args, Done)
   else if Name = 'captureForm' then
     Done(ToolCaptureForm(Args))
+  else if MatchText(Name, ['getDebugState', 'evaluateExpression', 'debugControl']) and (ExceptionDialogText <> '') then
+    Done(TToolResult.Error('The IDE is showing its Debugger Exception Notification ("' + ExceptionDialogText +
+      '"). The debugger cannot be used until the user answers it: Break keeps the program stopped for inspection, ' +
+      'Continue lets the program handle the exception.'))
   else if Name = 'getDebugState' then
     Done(ToolGetDebugState(Args))
   else if Name = 'evaluateExpression' then
@@ -606,9 +611,9 @@ begin
   else if Name = 'findSymbol' then
     Done(ToolFindSymbol(Args))
   else if Name = 'findReferences' then
-    Done(ToolFindReferences(Args))
+    ToolFindReferencesAsync(Args, Done)
   else if Name = 'renameSymbol' then
-    Done(ToolRenameSymbol(Args))
+    ToolRenameSymbolAsync(Args, Done)
   else
     Done(TToolResult.Error('Unknown tool: ' + Name));
 end;

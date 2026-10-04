@@ -12,8 +12,9 @@ implementation
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Win.Registry,
   System.Generics.Collections, System.JSON, Vcl.Menus, Vcl.ActnList, Vcl.ExtCtrls,
-  Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, ToolsAPI,
-  ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm,
+  Vcl.Dialogs, Vcl.Forms, Vcl.Graphics, Vcl.ComCtrls, Vcl.Clipbrd, Vcl.Imaging.pngimage, System.UITypes, ToolsAPI,
+  ClaudeCode.Utils, ClaudeCode.Mcp, ClaudeCode.IdeBackend, ClaudeCode.DiffForm, ClaudeCode.IdeTrees,
+  ClaudeCode.BackgroundTasks, ClaudeCode.Process,
   ClaudeCode.Launcher, ClaudeCode.TerminalFrame, ClaudeCode.TerminalPanel, ClaudeCode.FormTools,
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
   ClaudeCode.ProjectMap, ClaudeCode.ProjectMapForm, ClaudeCode.CodeTools, ClaudeCode.Prompts,
@@ -41,6 +42,8 @@ type
     FLastSent: TSelectionInfo;
     FLog: TStringList;
     FContextMenus: TClaudeContextMenus;
+    FTasks: TBackgroundTasks;
+    FTasksAction: TAction;
     procedure AddLog(const Msg: string);
     procedure StartServer;
     procedure CreateMenu;
@@ -51,6 +54,7 @@ type
     procedure WriteSetting(const Name, Value: string);
     function WorkDir: string;
     function ClaudeExtraArgs: string;
+    function StatusLineReceived(Json: string): string;
     procedure FocusEditor;
     function TerminalHostInfo: TTerminalHostInfo;
     function TerminalHostKey(Key: Word; Shift: TShiftState; Execute: Boolean): Boolean;
@@ -74,12 +78,22 @@ type
     procedure ClaudeMdExecute(Sender: TObject);
     procedure ProjectMapExecute(Sender: TObject);
     procedure ModernizeExecute(Sender: TObject);
+    procedure ReviewChangesExecute(Sender: TObject);
+    procedure BackgroundTaskExecute(Sender: TObject);
+    procedure BackgroundTasksExecute(Sender: TObject);
+    procedure TasksChanged(Sender: TObject);
+    procedure TaskFinished(Task: TBackgroundTask);
+    function BackgroundCommand(const Prompt: string): string;
+    procedure FormFromPictureExecute(Sender: TObject);
+    procedure CommitMessageExecute(Sender: TObject);
+    function InGitRepository: Boolean;
     procedure TimelineExecute(Sender: TObject);
     function SessionFrame: TClaudeTerminalFrame;
     procedure SendToClaude(const Text: string; Submit: Boolean);
     function FileRef(const Path: string; Line1, Line2: Integer): string;
     function PromptTemplate(const Command: string): string;
     procedure EditorCommand(const Command: string);
+    procedure ExplainValue;
     procedure AddToContext(const Files: TArray<string>);
   public
     constructor Create;
@@ -122,6 +136,7 @@ begin
   FBackendIntf := FBackend;
   FMcp := TMcpServer.Create(FBackendIntf);
   FMcp.OnClientsChanged := ClientsChanged;
+  FMcp.OnStatusLine := StatusLineReceived;
   FMcp.OnHook :=
     procedure(Json: string)
     begin
@@ -146,12 +161,14 @@ begin
       Result := FBackend.CurrentSelection(False).Valid;
     end);
   FContextMenus.OnEditorCommand := EditorCommand;
+  FContextMenus.CanExplainValue := DebugIsStopped;
   FContextMenus.OnAddToContext := AddToContext;
   FContextMenus.OnFixBuildErrors := BuildFixExecute;
 
   TClaudeTerminalFrame.HostInfo := TerminalHostInfo;
   TClaudeTerminalFrame.HostKey := TerminalHostKey;
   TClaudeTerminalFrame.DropSource := ProjectManagerSelection;
+  TClaudeTerminalFrame.DragSource := IdeTreeDragItems;
   RegisterClaudePanel;
   ProjectMapAsk :=
     procedure(UnitName, FileName: string)
@@ -172,14 +189,18 @@ begin
   TClaudeTerminalFrame.HostInfo := nil;
   TClaudeTerminalFrame.HostKey := nil;
   TClaudeTerminalFrame.DropSource := nil;
+  TClaudeTerminalFrame.DragSource := nil;
   DestroyAllDiffForms;
   DestroyProjectMapWindow;
   DestroyTimelineWindow;
+  DestroyBackgroundTasksWindow;
+  FreeAndNil(FTasks); // stops the tasks that still run
   FBackend.Shutdown; // a running build must not answer through a freed server
   if FMcp <> nil then
   begin
     FMcp.OnClientsChanged := nil;
     FMcp.OnHook := nil;
+    FMcp.OnStatusLine := nil;
     FMcp.Stop;
     FreeAndNil(FMcp);
   end;
@@ -222,6 +243,8 @@ procedure TClaudeCodeWizard.StartServer;
 begin
   try
     FMcp.Start;
+    // The --settings file as the settings want it (hooks, status line), also for claude started elsewhere.
+    ClaudeExtraArgs;
   except
     on E: Exception do
       AddLog('Failed to start server: ' + E.Message);
@@ -279,19 +302,67 @@ begin
   end;
 end;
 
+{ True when the user configured a status line of their own (ours would replace it for the session). }
+function UserHasStatusLine(const Dir: string): Boolean;
+var
+  F, Text: string;
+begin
+  for F in [TPath.Combine(ClaudeConfigDir, 'settings.json'), TPath.Combine(Dir, '.claude\settings.json'),
+    TPath.Combine(Dir, '.claude\settings.local.json')] do
+    if FileExists(F) and ReadTextFileAutoEnc(F, Text) and (Pos('"statusLine"', Text) > 0) then
+      Exit(True);
+  Result := False;
+end;
+
 function TClaudeCodeWizard.ClaudeExtraArgs: string;
 var
   S: TClaudeSettings;
+  StatusLine: Boolean;
 begin
   S := LoadSettings;
   Result := S.CommandArgs;
-  // Hooks that report turns and file edits to the IDE (Claude Timeline).
-  if S.Timeline and FMcp.Running and (FMcp.HookSettingsFile <> '') then
+  // Hooks that report turns and file edits to the IDE (Claude Timeline), and the status line that
+  // reports the session's context and cost.
+  StatusLine := S.StatusLine and not UserHasStatusLine(WorkDir);
+  FMcp.SetClaudeSettings(S.Timeline, StatusLine);
+  if (S.Timeline or StatusLine) and FMcp.Running and (FMcp.HookSettingsFile <> '') then
     Result := Trim(Result + ' --settings "' + FMcp.HookSettingsFile + '"');
   // Registers the "delphi" MCP server (build, project, designer and debugger tools) for this session.
   // Last, because --mcp-config takes every following value that is not an option.
   if S.DelphiTools and FMcp.Running and (FMcp.McpConfigFile <> '') then
     Result := Trim(Result + ' --mcp-config "' + FMcp.McpConfigFile + '"');
+end;
+
+function TClaudeCodeWizard.StatusLineReceived(Json: string): string;
+var
+  V: TJSONValue;
+  O: TJSONObject;
+  Model, Dir: string;
+  Context, Cost: Double;
+  Parts: TArray<string>;
+begin
+  // "Opus 5.5 · context 42% · $0.37": shown by Claude Code and next to the session's state in the panel.
+  Result := '';
+  V := TJSONObject.ParseJSONValue(Json);
+  try
+    if not (V is TJSONObject) then
+      Exit;
+    O := TJSONObject(V);
+    Dir := O.GetValue<string>('workspace.current_dir', O.GetValue<string>('cwd', ''));
+    Model := O.GetValue<string>('model.display_name', '');
+    Parts := nil;
+    if Model <> '' then
+      Parts := Parts + [Model];
+    if O.TryGetValue<Double>('context_window.used_percentage', Context) then
+      Parts := Parts + [Format('context %d%%', [Round(Context)])];
+    if O.TryGetValue<Double>('cost.total_cost_usd', Cost) then
+      Parts := Parts + [Format('$%.2f', [Cost], TFormatSettings.Invariant)];
+    Result := string.Join(' ' + #$00B7 + ' ', Parts);
+    if (ClaudePanelFrame <> nil) and (Dir <> '') then
+      ClaudePanelFrame.SetSessionUsage(Dir, Result);
+  finally
+    V.Free;
+  end;
 end;
 
 { Terminal panel callbacks }
@@ -308,6 +379,7 @@ begin
   Result.WorkDir := WorkDir;
   Result.Command := ReadSetting('PanelCommand', DEFAULT_PANEL_COMMAND);
   Result.ExtraArgs := ClaudeExtraArgs;
+  Result.ContinueLast := ReadSetting('ContinueLast', '1') <> '0';
   Result.Background := clWindow;
   if Supports(BorlandIDEServices, IOTAIDEThemingServices, Theming) and Theming.IDEThemingEnabled then
     Result.Background := Theming.StyleServices.GetSystemColor(clWindow);
@@ -447,7 +519,14 @@ begin
   AddItem(NewAction('ClaudeCodeClaudeMdAction', 'Create CLAUDE.md for Project...', '', ClaudeMdExecute));
   AddItem(NewAction('ClaudeCodeProjectMapAction', 'Project Map...', '', ProjectMapExecute));
   AddItem(NewAction('ClaudeCodeModernizeAction', 'Modernize Project with Claude...', '', ModernizeExecute));
+  AddItem(NewAction('ClaudeCodeFormPictureAction', 'Design Form from Picture with Claude...', '', FormFromPictureExecute));
   AddItem(NewAction('ClaudeCodeTimelineAction', 'Claude Timeline...', '', TimelineExecute));
+  AddItem(NewAction('ClaudeCodeBgTaskAction', 'Background Task with Claude...', '', BackgroundTaskExecute));
+  FTasksAction := NewAction('ClaudeCodeBgTasksAction', 'Background Tasks...', '', BackgroundTasksExecute);
+  FTasksAction.OnUpdate := TasksChanged; // the caption counts the running tasks
+  AddItem(FTasksAction);
+  AddItem(NewAction('ClaudeCodeReviewAction', 'Review Changes with Claude', '', ReviewChangesExecute));
+  AddItem(NewAction('ClaudeCodeCommitMsgAction', 'Write Commit Message with Claude', '', CommitMessageExecute));
   AddSeparator;
   AddItem(NewAction('ClaudeCodeStatusAction', 'Status and Log...', '', StatusExecute));
   AddItem(NewAction('ClaudeCodeRestartAction', 'Restart Server', '', RestartExecute));
@@ -501,6 +580,8 @@ begin
       AddLog('Lock file update failed: ' + E.Message);
   end;
   UpdateStatusIndicator(True);
+  // The Structure view is created (and may be recreated) after the package loads.
+  EnableIdeTreeDrag;
 end;
 
 procedure TClaudeCodeWizard.ClientsChanged(Sender: TObject);
@@ -947,6 +1028,11 @@ var
   Sel: TSelectionInfo;
   Line1, Line2: Integer;
 begin
+  if Command = ecExplainValue then
+  begin
+    ExplainValue;
+    Exit;
+  end;
   Sel := FBackend.CurrentSelection(False);
   if not Sel.Valid then
     Exit;
@@ -957,6 +1043,54 @@ begin
     Dec(Line2);
   SendToClaude(StringReplace(PromptTemplate(Command), '{ref}', FileRef(Sel.FilePath, Line1, Line2),
     [rfReplaceAll]), (Command <> ecAsk) and LoadSettings.SubmitRequests);
+end;
+
+{ The expression under the cursor: identifiers joined by dots (Order.Customer), or the selection. }
+function ExpressionAt(const Line: string; Index: Integer): string;
+var
+  A, B: Integer;
+begin
+  // Index is 0-based (UTF-16, as the selection reports it).
+  A := Index + 1;
+  B := Index;
+  while (A > 1) and CharInSet(Line[A - 1], ['A'..'Z', 'a'..'z', '0'..'9', '_', '.']) do
+    Dec(A);
+  while (B < Length(Line)) and CharInSet(Line[B + 1], ['A'..'Z', 'a'..'z', '0'..'9', '_', '.']) do
+    Inc(B);
+  Result := Copy(Line, A, B - A + 1).Trim(['.']);
+end;
+
+procedure TClaudeCodeWizard.ExplainValue;
+var
+  Sel: TSelectionInfo;
+  Lines: TArray<string>;
+  Expr, Prompt: string;
+begin
+  if not DebugIsStopped then
+  begin
+    ShowMessage('The debugged program is not stopped (no breakpoint, exception or pause).');
+    Exit;
+  end;
+  Sel := FBackend.CurrentSelection(True);
+  if not Sel.Valid then
+    Exit;
+  Expr := Trim(Sel.Text);
+  if (Expr = '') or Expr.Contains(#10) then
+  begin
+    Lines := ReadBufferText(EditorServices.TopBuffer).Split([#10]);
+    Expr := '';
+    if Sel.StartLine < Length(Lines) then
+      Expr := ExpressionAt(Lines[Sel.StartLine].TrimRight([#13]), Sel.StartChar);
+  end;
+  if Expr = '' then
+  begin
+    ShowMessage('Put the cursor on a variable (or select an expression) first.');
+    Exit;
+  end;
+  Prompt := DebugValuePrompt(Expr);
+  if (Prompt = '') or (SessionFrame = nil) then
+    Exit;
+  SendToClaude(Prompt, LoadSettings.SubmitRequests);
 end;
 
 procedure TClaudeCodeWizard.AddToContext(const Files: TArray<string>);
@@ -1026,6 +1160,115 @@ begin
     ShowMessage('Open a project first.');
 end;
 
+function TClaudeCodeWizard.InGitRepository: Boolean;
+var
+  Dir, Parent: string;
+begin
+  // The project folder or one above it holds .git (a folder, or a file in a worktree/submodule).
+  Dir := ExcludeTrailingPathDelimiter(WorkDir);
+  while Dir <> '' do
+  begin
+    if DirectoryExists(Dir + '\.git') or FileExists(Dir + '\.git') then
+      Exit(True);
+    Parent := ExcludeTrailingPathDelimiter(ExtractFilePath(Dir));
+    if SameText(Parent, Dir) then
+      Break;
+    Dir := Parent;
+  end;
+  Result := False;
+end;
+
+procedure TClaudeCodeWizard.FormFromPictureExecute(Sender: TObject);
+var
+  FormName, FormFile, Image: string;
+  Dlg: TOpenDialog;
+  Bmp: TBitmap;
+  Png: TPngImage;
+  Args: TJSONObject;
+  Prompt: string;
+begin
+  if not CurrentFormInfo(FormName, FormFile) then
+  begin
+    ShowMessage('Open the form to build on in the designer first (a new, empty form is fine).');
+    Exit;
+  end;
+  Image := '';
+  // A screenshot in the clipboard is the quickest source; otherwise a file.
+  if Clipboard.HasFormat(CF_BITMAP) then
+    case MessageDlg('Use the picture in the clipboard? (No: choose a file)', mtConfirmation,
+      [mbYes, mbNo, mbCancel], 0) of
+      mrYes:
+        begin
+          Bmp := TBitmap.Create;
+          Png := TPngImage.Create;
+          try
+            Bmp.Assign(Clipboard);
+            Png.Assign(Bmp);
+            Image := TPath.Combine(TPath.Combine(TPath.GetTempPath, 'claude-delphi'),
+              Format('form-picture-%s.png', [FormatDateTime('yyyymmdd-hhnnss', Now)]));
+            ForceDirectories(ExtractFilePath(Image));
+            Png.SaveToFile(Image);
+          finally
+            Png.Free;
+            Bmp.Free;
+          end;
+        end;
+      mrCancel:
+        Exit;
+    end;
+  if Image = '' then
+  begin
+    Dlg := TOpenDialog.Create(nil);
+    try
+      Dlg.Title := 'Picture of the form to build (screenshot, mockup or sketch)';
+      Dlg.Filter := 'Pictures (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp)|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp';
+      Dlg.Options := Dlg.Options + [ofFileMustExist];
+      if not Dlg.Execute then
+        Exit;
+      Image := Dlg.FileName;
+    finally
+      Dlg.Free;
+    end;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  Args := TJSONObject.Create;
+  try
+    Args.AddPair('image', Image);
+    Args.AddPair('form', FormName + ' (' + ExtractFileName(FormFile) + ')');
+    if not RenderPrompt('screenshot-to-form', Args, Prompt) then
+      Exit;
+  finally
+    Args.Free;
+  end;
+  // Pasted, not submitted: the user can add what the picture does not show (behavior, data).
+  SendToClaude(Prompt, False);
+end;
+
+procedure TClaudeCodeWizard.ReviewChangesExecute(Sender: TObject);
+begin
+  if not InGitRepository then
+  begin
+    ShowMessage('The project is not in a git repository: there are no uncommitted changes to review.');
+    Exit;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  SendToClaude(PromptText('review-changes', '', ''), LoadSettings.SubmitRequests);
+end;
+
+procedure TClaudeCodeWizard.CommitMessageExecute(Sender: TObject);
+begin
+  if not InGitRepository then
+  begin
+    ShowMessage('The project is not in a git repository.');
+    Exit;
+  end;
+  if SessionFrame = nil then
+    Exit;
+  SendToClaude(PromptText('commit-message', '', ''), LoadSettings.SubmitRequests);
+end;
+
 procedure TClaudeCodeWizard.ModernizeExecute(Sender: TObject);
 var
   Scenario: string;
@@ -1037,6 +1280,102 @@ begin
     Exit;
   // Pasted, not submitted: the user can add constraints (keep Win32, which units first...).
   SendToClaude(PromptText('modernize', 'scenario', Scenario), False);
+end;
+
+function TClaudeCodeWizard.BackgroundCommand(const Prompt: string): string;
+var
+  S: TClaudeSettings;
+  Cmd: string;
+begin
+  // claude -p: one unattended turn. File edits are applied (acceptEdits) and the hooks record them for
+  // the timeline; only reading, editing and the Delphi tools are allowed (no shell). --mcp-config last.
+  S := LoadSettings;
+  Cmd := S.PanelCommand + ' -p ' + QuoteArg(Prompt.Replace(sLineBreak, ' ').Replace(#10, ' ')) +
+    ' --output-format json --permission-mode acceptEdits --allowedTools ' +
+    QuoteArg('mcp__delphi Read Grep Glob Edit Write MultiEdit');
+  if Trim(S.Model) <> '' then
+    Cmd := Cmd + ' --model ' + QuoteArg(Trim(S.Model));
+  if S.Timeline and (FMcp.HookSettingsFile <> '') then
+    Cmd := Cmd + ' --settings ' + QuoteArg(FMcp.HookSettingsFile);
+  if FMcp.McpConfigFile <> '' then
+    Cmd := Cmd + ' --mcp-config ' + QuoteArg(FMcp.McpConfigFile);
+  Result := ResolveCommandLine(Cmd);
+end;
+
+procedure TClaudeCodeWizard.BackgroundTaskExecute(Sender: TObject);
+var
+  UnitFile, Title, Prompt: string;
+  Buffer: IOTAEditBuffer;
+begin
+  if not FMcp.Running then
+    StartServer;
+  UnitFile := '';
+  Buffer := EditorServices.TopBuffer;
+  if (Buffer <> nil) and SameText(ExtractFileExt(Buffer.FileName), '.pas') then
+    UnitFile := Buffer.FileName;
+  if not ChooseBackgroundTask(TaskTemplates(UnitFile), Title, Prompt, ThemeIdeForm) then
+    Exit;
+  if FTasks = nil then
+  begin
+    FTasks := TBackgroundTasks.Create;
+    FTasks.OnFinished := TaskFinished;
+  end;
+  FTasks.Start(Title, Prompt, BackgroundCommand(Prompt), WorkDir);
+  TasksChanged(nil);
+  BackgroundTasksExecute(nil);
+end;
+
+procedure TClaudeCodeWizard.BackgroundTasksExecute(Sender: TObject);
+begin
+  if FTasks = nil then
+  begin
+    FTasks := TBackgroundTasks.Create;
+    FTasks.OnFinished := TaskFinished;
+  end;
+  ShowBackgroundTasks(FTasks,
+    procedure(Task: TBackgroundTask)
+    var
+      Frame: TClaudeTerminalFrame;
+    begin
+      // The task's conversation in a new tab: ask what it did, or go on with it.
+      Frame := ShowClaudePanel;
+      if Frame <> nil then
+        Frame.UnusedView(Task.WorkDir).StartSession('--resume ' + Task.SessionId, True);
+    end,
+    procedure
+    begin
+      TimelineExecute(nil);
+    end,
+    ThemeIdeForm);
+end;
+
+procedure TClaudeCodeWizard.TasksChanged(Sender: TObject);
+var
+  N: Integer;
+begin
+  if (FTasksAction = nil) or (FTasks = nil) then
+    Exit;
+  N := FTasks.RunningCount;
+  if N > 0 then
+    FTasksAction.Caption := Format('Background Tasks (%d running)...', [N])
+  else
+    FTasksAction.Caption := 'Background Tasks...';
+end;
+
+procedure TClaudeCodeWizard.TaskFinished(Task: TBackgroundTask);
+var
+  Info: FLASHWINFO;
+begin
+  TasksChanged(nil);
+  // Tell the user when they are elsewhere: the IDE flashes on the taskbar.
+  if (Application.MainForm <> nil) and (GetForegroundWindow <> Application.MainForm.Handle) then
+  begin
+    Info := Default(FLASHWINFO);
+    Info.cbSize := SizeOf(Info);
+    Info.hwnd := Application.MainForm.Handle;
+    Info.dwFlags := FLASHW_TRAY or FLASHW_TIMERNOFG;
+    FlashWindowEx(Info);
+  end;
 end;
 
 procedure TClaudeCodeWizard.TimelineExecute(Sender: TObject);
@@ -1113,6 +1452,8 @@ begin
   Result.SubmitRequests := ReadSetting('SubmitRequests', '1') <> '0';
   Result.Timeline := ReadSetting('Timeline', '1') <> '0';
   Result.InlineDiff := ReadSetting('InlineDiff', '0') <> '0';
+  Result.ContinueLast := ReadSetting('ContinueLast', '1') <> '0';
+  Result.StatusLine := ReadSetting('StatusLine', '1') <> '0';
 end;
 
 procedure TClaudeCodeWizard.SaveSettings(const S: TClaudeSettings);
@@ -1129,6 +1470,8 @@ begin
   WriteSetting('SubmitRequests', Flag[S.SubmitRequests]);
   WriteSetting('Timeline', Flag[S.Timeline]);
   WriteSetting('InlineDiff', Flag[S.InlineDiff]);
+  WriteSetting('ContinueLast', Flag[S.ContinueLast]);
+  WriteSetting('StatusLine', Flag[S.StatusLine]);
 end;
 
 procedure TClaudeCodeWizard.SettingsExecute(Sender: TObject);
@@ -1142,6 +1485,7 @@ begin
     SaveSettings(S);
     FBackend.Sync.Enabled := S.SyncEditor;
     FBackend.InlineDiff := S.InlineDiff;
+    ClaudeExtraArgs; // rewrites the --settings file
   end;
 end;
 

@@ -60,8 +60,8 @@ as `mcp__delphi__*` and Claude asks for permission before using them like any MC
 | `runTests` | builds a DUnitX project (found in the group) and runs it: each failing test with its message and the file/line of the test method; also in the **Claude Tests** tab of Messages |
 | `pasteDfm` | creates components from DFM text the way Ctrl+V does in the designer: nested controls, collections, events; returns the real names |
 | `getUnitOutline` | a unit's structure with line ranges: uses, types and members, routines and method bodies |
-| `findSymbol` / `findReferences` | declarations and uses of a name in the project's sources and text forms, comments and strings skipped |
-| `renameSymbol` | renames across units and forms: a dry run lists the occurrences with ids, then exactly the chosen ones are changed (open files in the editor, undoable; closed files keep their encoding) |
+| `findSymbol` / `findReferences` | declarations and uses of a name in the project's sources and text forms, comments and strings skipped; `findReferences` has every use checked by DelphiLSP (the compiler) and groups them by the declaration they refer to (`TOrder.Create` apart from `TObject.Create`), form files apart |
+| `renameSymbol` | renames across units and forms: with `declaration` ("OrderLogic.pas:23", from `findReferences`) only the uses of that symbol, as DelphiLSP resolves them; a dry run lists the occurrences with ids, then exactly the chosen ones are changed (open files in the editor, undoable; closed files keep their encoding) |
 | `getUnitDependencies` / `showProjectMap` | how units use each other (largest, most used, cycles) / the interactive map for the user |
 | `captureApp` / `getAppUI` / `appAction` | the running program: pictures of its windows, its UI Automation tree, and click/type/set text like a user (the user's foreground window keeps the focus) |
 | `listConnections` / `getDatabaseSchema` / `runQuery` | the FireDAC connections of the project's forms, the schema behind them, and read-only queries (one SELECT, run in a transaction that is rolled back) |
@@ -74,7 +74,7 @@ Designer changes are not saved automatically: review them in the IDE and save or
 **Slash commands.** The `delphi` server also offers ready workflows as MCP prompts; Claude Code shows them as
 commands: `/mcp__delphi__make-tests-pass`, `/mcp__delphi__hunt-bug <what goes wrong>`,
 `/mcp__delphi__screenshot-to-form <image>`, `/mcp__delphi__crud-form <table>`, `/mcp__delphi__modernize <scenario>`,
-`/mcp__delphi__explain-architecture`.
+`/mcp__delphi__explain-architecture`, `/mcp__delphi__review-changes [focus]`, `/mcp__delphi__commit-message`.
 A `claude` started outside the IDE can use the tools of the most recently started IDE with
 `claude --mcp-config "%USERPROFILE%\.claude\ide\delphi-mcp.json"`.
 
@@ -96,7 +96,7 @@ After a session ends, pressing Enter in the panel starts a new one.
 Keyboard in the panel:
 - all keys (Esc, Ctrl+C, Ctrl+R, Shift+Tab...) go to Claude;
 - **Ctrl+C** copies when text is selected, **Ctrl+V** / Shift+Insert paste text; a copied picture (screenshot) is saved as PNG and its path pasted so Claude attaches it; copied files become `@`-mentions;
-- files dragged onto the terminal from Explorer or the **Project Manager** are pasted as `@`-mentions (pictures as paths; a project node stands for its folder, one node per drag);
+- files dragged onto the terminal from Explorer or the **Project Manager** are pasted as `@`-mentions (pictures as paths; all selected nodes, a project stands for its folder); items dragged from the **Structure view** become `@file#Lx-y` (a method gives its body, a type its declaration);
 - **function keys** bound to IDE commands (F9, F7, F12...) run those IDE commands;
 - **Ctrl+Shift+Alt+C** returns focus to the code editor (in the editor, the same shortcut opens/focuses the panel).
 
@@ -121,7 +121,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 Or manually: *Component → Install Packages… → Add…* and pick the BPL matching the IDE bitness.
 Uninstall: `install.ps1 -Uninstall`.
 
-If Delphi is installed elsewhere: `build.bat "C:\path\to\Studio\37.0"`.
+`build.bat` finds Delphi via the registry (`RootDir` of `BDS\37.0`); to override: `build.bat "C:\path\to\Studio\37.0"`. In PowerShell run it as `.\build.bat`.
+
+Debugging in the 64-bit IDE (it debugs through lldb):
+- breakpoints and logpoints need *Project Options → Building → Delphi Compiler → Linking → Include debug information in the executable* (`DCC_DebugInfoInExe`); `debugControl` warns when it is off;
+- the IDE's debugger sometimes has no call stack for its Open Tools API (the Call Stack view still shows it). Then the debugger tools give the stopped frame only, with a note, instead of letting the IDE fail.
 
 ## Usage
 
@@ -143,12 +147,16 @@ Menu **Tools → Claude Code**:
 
   ![Modernize Project dialog](docs/images/modernize.png)
 
+- **Design Form from Picture with Claude...**: takes a screenshot, mockup or sketch (from the clipboard or a file) and has Claude build it on the form open in the designer: it writes the controls as DFM, creates them with `pasteDfm`, compares `captureForm` with the picture and adjusts until they match. The request is pasted, so you can add what the picture does not show.
 - **Claude Timeline...**: Claude's turns with the files each one changed (see below).
+- **Background Task with Claude...**: Claude works on a task in a separate process (`claude -p`) while you go on: DUnitX tests or XML documentation for the unit in the editor, clearing the compiler warnings, or a request of your own. Its file edits are applied right away and recorded in the Claude Timeline (review and rewind them there); it may read, edit and use the Delphi tools, but not run shell commands. **Background Tasks...** lists the tasks with their state, cost and Claude's summary; **Continue in Panel** opens a task's conversation in the panel. The IDE flashes on the taskbar when a task ends.
+- **Review Changes with Claude**: Claude reviews the uncommitted changes (`git diff HEAD`) for bugs, object lifetime, exceptions, encoding, threads and `.dfm`/code consistency, builds and runs the tests, ranks the findings and fixes the clear ones through the usual review of changes; it never stages or commits.
+- **Write Commit Message with Claude**: a message for the staged (or all uncommitted) changes in the style of the recent commits.
 - **Create CLAUDE.md for Project...**: writes a "Delphi project" section into the project's `CLAUDE.md` (type, framework, platforms, build command, source encoding, forms, DUnitX projects, when to use the `mcp__delphi__*` tools). Only the part between `<!-- delphi:begin -->` and `<!-- delphi:end -->` is generated; you review it in the diff window first.
 - **Send Selection to Claude** (`Ctrl+Alt+K`): adds `@file#Lx-y` for the selected code to Claude's prompt; in the form designer it pastes the selected components as DFM text.
 - **Status and Log…**: port, number of connected clients, lock file, log.
 - **Restart Server**: restarts with a new port and token (running sessions need `/ide` to reconnect).
-- **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, whether context-menu requests are sent right away, whether proposed changes are reviewed **in the code editor** instead of the diff window, and whether Claude's turns are **recorded for the timeline**.
+- **Settings…**: the panel and external console commands, model (`--model`), permission mode (`--permission-mode`), other arguments, whether Claude gets the Delphi tools, whether Claude's file changes are applied to open editors, whether context-menu requests are sent right away, whether proposed changes are reviewed **in the code editor** instead of the diff window, whether Claude's turns are **recorded for the timeline**, and whether opening the panel **continues the project's last conversation** (on by default; only interactive conversations count, and **New Session** always starts afresh), and whether the panel shows the session's **model, context use and cost** (through a Claude Code status line, `POST /statusline`; Claude Code shows the same line; skipped when you have a `statusLine` of your own).
 
   ![Settings dialog](docs/images/settings.png)
 
@@ -159,6 +167,10 @@ Menu **Tools → Claude Code**:
   *Ask Claude About This...* only puts the reference into the prompt. The request texts can be changed in
   `%USERPROFILE%\.claude\delphi-prompts.json`, e.g. `{"explain": "Поясни цей код: {ref}"}`
   (keys: `explain`, `refactor`, `review`, `test`, `doc`, `ask`).
+  *Explain This Value (debugger)*, available while the debugged program is stopped, evaluates the selected
+  expression (or the identifier under the cursor, e.g. `Order.Customer`) and asks Claude what the value means at
+  this point, with the current line and the call stack; Claude evaluates related expressions to find where a wrong
+  value comes from.
 - **Project Manager → Add to Claude Context**: puts `@file` (or `@folder/` for a project) for the selected nodes into the prompt.
 - **Messages → Fix Build Errors with Claude**: the same as the Tools menu command (the Messages view does not expose
   the text of its lines, so the project is rebuilt to collect the errors).
@@ -244,6 +256,7 @@ src/ClaudeCode.Wizard.pas         IDE wizard: menu, timers, settings
 src/ClaudeCode.Process.pas        running console programs, background jobs (no ToolsAPI)
 src/ClaudeCode.PascalIndex.pas    Object Pascal tokenizer, declarations, occurrences, outlines (no ToolsAPI)
 src/ClaudeCode.CodeTools.pas      getUnitOutline, findSymbol, findReferences, renameSymbol
+src/ClaudeCode.DelphiLsp.pas      client of DelphiLSP.exe (textDocument/definition) for resolving names
 src/ClaudeCode.TestRunner.pas     running DUnitX executables, NUnit XML / console results (no ToolsAPI)
 src/ClaudeCode.AppAutomation.pas  window pictures, UI Automation tree and actions (no ToolsAPI)
 src/ClaudeCode.ProjectMap.pas     unit dependency graph and cycles (no ToolsAPI)
@@ -256,6 +269,8 @@ src/ClaudeCode.Prompts.pas        MCP prompts (slash commands) of the delphi ser
 src/ClaudeCode.Timeline.pas       turns and file snapshots from Claude Code hooks (no ToolsAPI)
 src/ClaudeCode.TimelineForm.pas   Claude Timeline window
 src/ClaudeCode.InlineDiff.pas     reviewing proposed changes in the code editor
+src/ClaudeCode.IdeTrees.pas       what is dragged from the Project Manager and Structure view (RTTI)
+src/ClaudeCode.BackgroundTasks.pas background tasks (claude -p), their dialog and window
 tests/e2e/                        sample project group for end-to-end tests in a real IDE
 tests/e2e-test.mjs                end-to-end test of the tools in a running IDE with tests/e2e open
 tests/mcp-call.mjs, ide-call.mjs  call one tool of a running IDE (delphi server / IDE channel)
@@ -316,7 +331,7 @@ deletes files there, runs the program and clicks through IDE windows (Project Ma
 - The debugger API has no list of local variables: Claude reads the code around the current line and evaluates what it needs. Exception class/message come from evaluating `ExceptObject` (best effort).
 - Call stack frames are named from the source (the method around the line), not by the debugger: formatting the debugger's frame headers makes the Delphi 13 debugger kernel assert.
 - Logpoints are breakpoints that stop and continue the program: fine for events and loops of hundreds of iterations, slow for very hot code (use `maxHits` or a condition).
-- `findSymbol`/`findReferences`/`renameSymbol` read the code, not the compiler's symbol tables: names are matched, not resolved (overloads and same-named members of other classes match too; that is why rename has a dry run). Conditional compilation is ignored.
+- `findSymbol` reads the code, not the compiler's symbol tables. `findReferences` and `renameSymbol` find occurrences by name and then ask DelphiLSP (its own process, configured from the active project's search paths and the IDE library path) which declaration each one is; DelphiLSP has no find-references of its own, so a name used in thousands of places is checked only up to 600 occurrences / 90 s. Form files, units of other projects of the group and code the compiler cannot read stay "not resolved". Only Win32/Win64; the first check starts the server (a few seconds).
 - `getAppUI`/`appAction` need UI Automation: VCL windowed controls are exposed well, graphic controls (TLabel, TSpeedButton) and FMX only partly; then x/y on the picture from `captureApp` works. Keys are posted to the focused control (Ctrl/Alt shortcuts may not reach the program); after Enter, Tab, Esc or Backspace followed by more text the keys pause for 100 ms so they arrive in order. While a logpoint holds the program for a moment, `captureApp`, `getAppUI` and `appAction` wait (up to 5 s) instead of failing.
 - Database tools support FireDAC connections (with the drivers installed in the IDE).
 - The timeline records files changed through Claude's Edit/Write/MultiEdit tools; files changed by shell commands are not recorded.

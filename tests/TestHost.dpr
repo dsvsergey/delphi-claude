@@ -9,7 +9,7 @@ uses
   Winapi.Windows, System.SysUtils, System.Classes, System.JSON, System.IOUtils,
   ClaudeCode.Utils, ClaudeCode.WebSocket, ClaudeCode.Diff, ClaudeCode.Mcp, ClaudeCode.Build,
   ClaudeCode.TextSync, ClaudeCode.ComponentProps, System.TypInfo, ClaudeCode.PascalIndex, ClaudeCode.TestRunner,
-  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline,
+  ClaudeCode.ProjectMap, ClaudeCode.DbInfo, ClaudeCode.Modernize, ClaudeCode.Timeline, ClaudeCode.BackgroundTasks, ClaudeCode.DelphiLsp, System.Win.Registry,
   FakeBackend;
 
 procedure Expect(Cond: Boolean; const What: string);
@@ -37,6 +37,13 @@ begin
   Expect(ParseBuildLine('MSBUILD : error MSB1009: Project file does not exist.', '', M) and
     (M.FileName = '') and (M.Code = 'MSB1009') and (M.Severity = bsError), 'msbuild error without location');
   Expect(not ParseBuildLine('  BuildSample.dproj -> C:\p\BuildSample.exe', '', M), 'plain output line');
+  // A path with parentheses (Program Files (x86)): the targets file reports a locked output file.
+  Expect(ParseBuildLine('d:\Program Files (x86)\Embarcadero\Studio\37.0\Bin\CodeGear.Delphi.Targets(427,5): error ' +
+    'F2039: Could not create output file ''.\out\Win64\OrdersTests.exe'' [D:\e2e\OrdersTests.dproj]', '', M) and
+    (M.Severity = bsFatal) and (M.Code = 'F2039') and (M.Line = 427) and
+    M.FileName.EndsWith('CodeGear.Delphi.Targets'), 'error in a path with parentheses: ' + M.FileName);
+  Expect(ParseBuildLine('C:\Projects (old)\U.pas(12,3): error E2003: Undeclared identifier: ''X'' [C:\p.dproj]', '', M) and
+    (M.Line = 12) and (M.FileName = 'C:\Projects (old)\U.pas'), 'unit in a folder with parentheses');
   Writeln('BUILD PARSER OK');
 end;
 
@@ -438,6 +445,18 @@ begin
   Expect((Info.UnitName = 'Demo.Orders') and (Info.UnitKind = 'unit') and (Info.LineCount = 37), 'unit header');
   Expect((Length(Info.IntfUses) = 2) and (Info.IntfUses[1].Name = 'Vcl.Forms') and (Length(Info.ImplUses) = 1),
     'uses clauses');
+  // Structure view nodes: a method gives its body, a type its block, a field its line.
+  Expect(FindStructureItem(Info, ['Structure', 'implementation', 'TOrder.Save(const Name: string)'], D) and
+    (D.Line = 25) and (D.EndLine = 31), Format('structure: method body %s %s.%s %d-%d', [D.KindName, D.Parent, D.Name, D.Line, D.EndLine]));
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder', 'Save(const Name: string)'], D) and
+    (D.Line = 25), 'structure: method of a class goes to its body');
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder'], D) and (D.Line = 6) and (D.EndLine = 14),
+    Format('structure: class block %d-%d', [D.Line, D.EndLine]));
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'TOrder', 'FTotal: Currency'], D) and (D.Line = 8),
+    'structure: field');
+  Expect(FindStructureItem(Info, ['Structure', 'interface', 'Helper(X: Integer): Integer'], D) and
+    (D.Line = 33) and (D.EndLine = 36), 'structure: routine declared in the interface');
+  Expect(not FindStructureItem(Info, ['Structure', 'interface', 'Nope'], D), 'structure: unknown');
   Expect(FindDecl(Info, 'TOrder', pdClass, D) and (D.Line = 6) and (D.EndLine = 14) and
     (D.Ancestor = 'TPersistent, IInterface'), 'class range/ancestor: ' + D.Ancestor);
   Expect(FindDecl(Info, 'TOrder.FTax', pdField, D) and (D.Visibility = 'private'), 'field list');
@@ -751,6 +770,120 @@ begin
   Writeln('TIMELINE OK');
 end;
 
+procedure BackgroundTaskSelfTest;
+var
+  Text, Session: string;
+  Cost: Double;
+  IsError: Boolean;
+  T: TArray<TTaskTemplate>;
+begin
+  // claude -p --output-format json: a warning on stderr may come first.
+  Expect(ParseClaudeResult('warning: something' + #10 + '{"type":"result","subtype":"success","is_error":false,' +
+    '"result":"Added 3 tests.","session_id":"abc","total_cost_usd":0.125}' + #10, Text, Cost, Session, IsError) and
+    (Text = 'Added 3 tests.') and (Session = 'abc') and (Abs(Cost - 0.125) < 1e-9) and not IsError, 'claude -p result');
+  Expect(ParseClaudeResult('{"type":"result","is_error":true,"result":"Credit balance is too low"}', Text, Cost,
+    Session, IsError) and IsError, 'claude -p error result');
+  Expect(not ParseClaudeResult('command not found', Text, Cost, Session, IsError), 'no result object');
+  T := TaskTemplates('C:' + PathDelim + 'p' + PathDelim + 'Unit1.pas');
+  Expect((Length(T) = 3) and T[0].Title.Contains('Unit1.pas') and T[0].Prompt.Contains('do not ask'), 'task templates');
+  Expect(Length(TaskTemplates('')) = 1, 'templates without a unit');
+  Writeln('BACKGROUND TASKS OK');
+end;
+
+procedure DelphiLspSelfTest;
+var
+  Reg: TRegistry;
+  Bds, Dir, Text, Err: string;
+  Lsp: TDelphiLsp;
+  Settings: TJSONObject;
+  Files: TJSONArray;
+  L: TLspLocation;
+  U: string;
+begin
+  // The real DelphiLSP.exe of the RAD Studio on this machine, on the e2e sample.
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_LOCAL_MACHINE;
+    Bds := '';
+    if Reg.OpenKeyReadOnly('SOFTWARE\WOW6432Node\Embarcadero\BDS\37.0') or
+       Reg.OpenKeyReadOnly('SOFTWARE\Embarcadero\BDS\37.0') then
+      Bds := Reg.ReadString('RootDir');
+  finally
+    Reg.Free;
+  end;
+  if (Bds = '') or not FileExists(TPath.Combine(Bds, 'bin\DelphiLSP.exe')) then
+  begin
+    Writeln('DELPHI LSP SKIPPED (no RAD Studio 13)');
+    Exit;
+  end;
+  Dir := TPath.GetFullPath(TPath.Combine(ExtractFilePath(ParamStr(0)), 'e2e'));
+  Settings := TJSONObject.Create;
+  Lsp := TDelphiLsp.Create(TPath.Combine(Bds, 'bin\DelphiLSP.exe'));
+  try
+    Files := TJSONArray.Create;
+    for U in ['OrderLogic', 'MainForm', 'OrdersData'] do
+      Files.Add(TJSONObject.Create.AddPair('name', U).AddPair('file', LspUri(TPath.Combine(Dir, U + '.pas'))));
+    Settings.AddPair('project', LspUri(TPath.Combine(Dir, 'OrdersApp.dproj')));
+    Settings.AddPair('dllname', 'dcc32370.dll');
+    Settings.AddPair('dccOptions', Format('-$D+ -NSSystem;Winapi;Vcl;Data;FireDAC -U"%slib\win32\release"',
+      [IncludeTrailingPathDelimiter(Bds)]));
+    Settings.AddPair('projectFiles', Files);
+    Settings.AddPair('includeDCUsInUsesCompletion', TJSONBool.Create(False));
+    Settings.AddPair('enableKeyWordCompletion', TJSONBool.Create(False));
+    Settings.AddPair('browsingPaths', TJSONArray.Create);
+    Expect(Lsp.Start(Dir, Settings, 'k', Err), 'DelphiLSP starts: ' + Err);
+    ReadTextFileAutoEnc(TPath.Combine(Dir, 'OrderLogic.pas'), Text);
+    Lsp.OpenText(TPath.Combine(Dir, 'OrderLogic.pas'), Text);
+    // "FLines" in "for I := 0 to FLines.Count - 2 do" (line 63) is the field declared on line 20.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 63, 18);
+    Expect(SameText(L.FileName, TPath.Combine(Dir, 'OrderLogic.pas')) and (L.Line = 20),
+      Format('definition of FLines: %s:%d', [L.FileName, L.Line]));
+    // Format comes from a unit without source here: a bare unit file name.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 74, 13);
+    Expect(SameText(L.FileName, 'System.SysUtils.pas') and (L.Line > 0), Format('definition of Format: %s:%d',
+      [L.FileName, L.Line]));
+    // A keyword has no definition.
+    L := Lsp.Definition(TPath.Combine(Dir, 'OrderLogic.pas'), 63, 3);
+    Expect(L.Line = 0, Format('no definition for "for": %s:%d', [L.FileName, L.Line]));
+    Lsp.Stop;
+    Expect(not Lsp.Running, 'DelphiLSP stops');
+  finally
+    Lsp.Free;
+    Settings.Free;
+  end;
+  Writeln('DELPHI LSP OK');
+end;
+
+procedure ConversationSelfTest;
+var
+  Dir, Old: string;
+begin
+  // --continue only where Claude Code has a conversation for the folder.
+  Dir := TPath.Combine(TPath.GetTempPath, 'cc-conv-' + IntToStr(GetTickCount));
+  Old := GetEnvironmentVariable('CLAUDE_CONFIG_DIR');
+  SetEnvironmentVariable('CLAUDE_CONFIG_DIR', PChar(Dir));
+  try
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--nprojects-delphi-claude'));
+    TFile.WriteAllText(TPath.Combine(Dir, 'projects\D--nprojects-delphi-claude\s.jsonl'),
+      '{"type":"user","entrypoint":"cli","cwd":"x"}'#10);
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--empty'));
+    ForceDirectories(TPath.Combine(Dir, 'projects\D--sdk'));
+    TFile.WriteAllText(TPath.Combine(Dir, 'projects\D--sdk\p.jsonl'), '{"type":"user","entrypoint":"sdk-ts"}'#10);
+    Expect(HasClaudeConversation('D:\nprojects\delphi-claude'), 'conversation of a folder');
+    Expect(HasClaudeConversation('D:\nprojects\delphi-claude\'), 'trailing backslash');
+    Expect(not HasClaudeConversation('D:\nprojects\delphi'), 'other folder');
+    Expect(not HasClaudeConversation('D:\empty'), 'folder without conversations');
+    Expect(not HasClaudeConversation('D:\sdk'), 'claude -p sessions do not count');
+  finally
+    if Old = '' then
+      SetEnvironmentVariable('CLAUDE_CONFIG_DIR', nil)
+    else
+      SetEnvironmentVariable('CLAUDE_CONFIG_DIR', PChar(Old));
+    TDirectory.Delete(Dir, True);
+  end;
+  Writeln('CONVERSATION OK');
+end;
+
 var
   Mcp: TMcpServer;
   Deadline: TDateTime;
@@ -767,6 +900,9 @@ begin
     DbInfoSelfTest;
     ModernizeSelfTest;
     TimelineSelfTest;
+    ConversationSelfTest;
+    BackgroundTaskSelfTest;
+    DelphiLspSelfTest;
     if SameText(ParamStr(1), 'build') then
     begin
       BuildRunSelfTest;
