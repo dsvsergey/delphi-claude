@@ -37,6 +37,13 @@ begin
   Expect(ParseBuildLine('MSBUILD : error MSB1009: Project file does not exist.', '', M) and
     (M.FileName = '') and (M.Code = 'MSB1009') and (M.Severity = bsError), 'msbuild error without location');
   Expect(not ParseBuildLine('  BuildSample.dproj -> C:\p\BuildSample.exe', '', M), 'plain output line');
+  // A path with parentheses (Program Files (x86)): the targets file reports a locked output file.
+  Expect(ParseBuildLine('d:\Program Files (x86)\Embarcadero\Studio\37.0\Bin\CodeGear.Delphi.Targets(427,5): error ' +
+    'F2039: Could not create output file ''.\out\Win64\OrdersTests.exe'' [D:\e2e\OrdersTests.dproj]', '', M) and
+    (M.Severity = bsFatal) and (M.Code = 'F2039') and (M.Line = 427) and
+    M.FileName.EndsWith('CodeGear.Delphi.Targets'), 'error in a path with parentheses: ' + M.FileName);
+  Expect(ParseBuildLine('C:\Projects (old)\U.pas(12,3): error E2003: Undeclared identifier: ''X'' [C:\p.dproj]', '', M) and
+    (M.Line = 12) and (M.FileName = 'C:\Projects (old)\U.pas'), 'unit in a folder with parentheses');
   Writeln('BUILD PARSER OK');
 end;
 
