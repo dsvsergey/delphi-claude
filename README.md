@@ -123,6 +123,10 @@ Uninstall: `install.ps1 -Uninstall`.
 
 If Delphi is installed elsewhere: `build.bat "C:\path\to\Studio\37.0"`.
 
+Debugging in the 64-bit IDE (it debugs through lldb):
+- breakpoints and logpoints need *Project Options → Building → Delphi Compiler → Linking → Include debug information in the executable* (`DCC_DebugInfoInExe`); `debugControl` warns when it is off;
+- the IDE's debugger sometimes has no call stack for its Open Tools API (the Call Stack view still shows it). Then the debugger tools give the stopped frame only, with a note, instead of letting the IDE fail.
+
 ## Usage
 
 Menu **Tools → Claude Code**:

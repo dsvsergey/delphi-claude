@@ -101,6 +101,22 @@ async function waitFor(fn, ms = 20000, step = 500) {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(step)) { const v = await fn(); if (v) return v; }
   return null;
 }
+// The 64-bit IDE shows its Debugger Exception Notification for the failing tests' exceptions (the 32-bit
+// IDE does not stop on them): answer Continue, as the user would, until the program ends or stops.
+async function throughExceptions(r, waitSec = 60) {
+  for (let i = 0; i < 20 && r?.state === 'exception' && r.exception; i++) {
+    await clickIde('Debugger Exception Notification', /Button "Continue"/);
+    await sleep(500);
+    r = await waitFor(async () => {
+      if ((await ideWindows()).some(w => w.title === 'Debugger Exception Notification'))
+        return { state: 'exception', exception: 'again' };
+      const s = await debugState();
+      if (['noProcess', 'terminated'].includes(s.state)) return { ...s, note: 'The process ended' };
+      return s.state === 'stopped' && !s.logpoint ? json(await call('getDebugState', { maxFrames: 30, contextLines: 6 })) : null;
+    }, waitSec * 1000, 500);
+  }
+  return r;
+}
 async function debugState() { return json(await call('getDebugState', { maxFrames: 6, contextLines: 0 })) || {}; }
 async function ensureNoProcess() {
   const s = await debugState();
@@ -203,20 +219,23 @@ if (want('debug')) {
   check(!r.isError, 'setLogpoint with call stacks');
   r = await call('setLogpoint', { file: fwd(file('OrderLogic.pas')), line: 64, expressions: [] });
   check(r.isError, 'setLogpoint without expressions is refused');
-  r = json(await call('debugControl', { action: 'start', project: 'OrdersTests', waitSec: 60 }));
+  r = await throughExceptions(json(await call('debugControl', { action: 'start', project: 'OrdersTests', waitSec: 60 })));
   check(r && r.note === 'The process ended', 'start runs the tests to the end (logpoint stops do not end the wait)', JSON.stringify(r));
   r = await call('getLogpointHits', {});
   check(/logpoint \d+ at OrderLogic\.pas:64 - 1 hit/.test(r.text) && /\b0 \| 0 \| 2\b/.test(r.text),
     'getLogpointHits: one loop iteration over two lines (the bug)', r.text);
-  check(/OrderLogic\.pas:69 - 1 hit/.test(r.text) && /TOrderTests\.LineCountCountsLines \(OrderTests\.pas:\d+\)/.test(r.text),
+  // The 64-bit IDE's debugger sometimes has no call stack for a stop: then the stopped frame only.
+  check(/OrderLogic\.pas:69 - 1 hit/.test(r.text) && (/TOrderTests\.LineCountCountsLines \(OrderTests\.pas:\d+\)/.test(r.text) ||
+    /TOrder\.LineCount \(OrderLogic\.pas:69\)\s+\(the IDE's debugger did not give/.test(r.text)),
     'getLogpointHits: call stack named from the source', r.text);
   r = await call('listBreakpoints', {});
   check((json(r)?.breakpoints || []).filter(b => b.logpoint).length === 2, 'listBreakpoints marks logpoints');
   await call('removeLogpoint', {});
   r = await call('setBreakpoint', { file: fwd(file('OrderLogic.pas')), line: 64 });
-  r = json(await call('debugControl', { action: 'start', project: 'OrdersTests', waitSec: 60 }));
+  r = await throughExceptions(json(await call('debugControl', { action: 'start', project: 'OrdersTests', waitSec: 60 })));
   const frames = r?.currentThread?.callStack || [];
-  check(r?.state === 'stopped' && r.currentThread.line === 64 && frames.some(f => f.call === 'TOrderTests.TotalAddsAllLines'),
+  check(r?.state === 'stopped' && r.currentThread.line === 64 &&
+    (frames.some(f => f.call === 'TOrderTests.TotalAddsAllLines') || (frames.length === 1 && frames[0].call === 'TOrder.CalcTotal' && frames[0].note)),
     'breakpoint stop with a call stack (no debugger assertion)', JSON.stringify(r).slice(0, 500));
   r = json(await call('evaluateExpression', { expression: 'FLines.FCount' }));
   check(r?.value === '2', 'evaluateExpression at the stop');
@@ -396,7 +415,7 @@ if (want('timeline')) {
   check(confirm, 'the rewind asks for confirmation', JSON.stringify((await ideWindows()).map(w => w.title)));
   if (confirm) {
     await clickIde(confirm.title, /Button "OK"/, 'point');
-    const report = await waitFor(async () => (await ideWindows()).find(w => w.class === 'TMessageForm'));
+    const report = await waitFor(async () => (await ideWindows()).find(w => w.title === 'Claude Timeline: Rewind'));
     if (report) await clickIde(report.title, /Button "OK"/, 'point');
   }
   await sleep(1000);

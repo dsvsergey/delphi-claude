@@ -36,6 +36,10 @@ function DebugValuePrompt(const Expr: string): string;
 procedure CancelDebugWaits;
 { True while the program is stopped only because a logpoint is recording (it runs on by itself). }
 function StoppedAtLogpoint: Boolean;
+{ The message of the IDE's "Debugger Exception Notification" while it is open, else ''. The debugger
+  must not be touched then: the IDE goes on with its exception handling when the user answers, and
+  crashes (DoShowException) if the debugger state was read or changed in between. }
+function ExceptionDialogText: string;
 { Removes the logpoints (their breakpoints would stop the program without us) and timers. }
 procedure ShutdownDebugTools;
 
@@ -43,7 +47,8 @@ implementation
 
 uses
   Winapi.Windows, System.Math, System.DateUtils, System.Generics.Collections, Vcl.ExtCtrls, Vcl.ActnList,
-  Vcl.Menus, ClaudeCode.Utils, ClaudeCode.IdeBackend, ClaudeCode.PascalIndex, ClaudeCode.CodeTools;
+  Vcl.Menus, Vcl.Forms, Vcl.Controls, System.TypInfo, System.StrUtils, ClaudeCode.Utils, ClaudeCode.IdeBackend, ClaudeCode.PascalIndex,
+  ClaudeCode.CodeTools;
 
 const
   STOPPED_STATES = [psStopped, psException, psFault, psResFault];
@@ -51,6 +56,38 @@ const
   EXCEPTION_STATES = [psException, psFault, psResFault];
   EVAL_TIMEOUT_MS = 5000;
   EVAL_BUFFER_CHARS = 64 * 1024;
+
+function ExceptionDialogText: string;
+
+  procedure Scan(C: TControl);
+  var
+    I: Integer;
+    S: string;
+  begin
+    if IsPublishedProp(C, 'Caption') then
+    begin
+      S := GetStrProp(C, 'Caption');
+      if ContainsText(S, 'exception') and (Length(S) > Length(Result)) then
+        Result := S;
+    end;
+    if C is TWinControl then
+      for I := 0 to TWinControl(C).ControlCount - 1 do
+        Scan(TWinControl(C).Controls[I]);
+  end;
+
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to Screen.FormCount - 1 do
+    if (Screen.Forms[I].ClassName = 'TExceptionNotificationDlg') and Screen.Forms[I].Visible then
+    begin
+      Scan(Screen.Forms[I]);
+      if Result = '' then
+        Result := 'The debugged program raised an exception';
+      Exit;
+    end;
+end;
 
 function Debugger: IOTADebuggerServices;
 begin
@@ -75,6 +112,38 @@ const
   Names: array[TOTAThreadState] of string = ('stopped', 'runnable', 'blocked', 'none', 'other');
 begin
   Result := Names[S];
+end;
+
+{ The 64-bit IDE names the current file of a thread without its folder (OrderLogic.pas): the unit of
+  an open module or of the project group with that name. }
+function FullSourcePath(const FileName: string): string;
+var
+  MS: IOTAModuleServices;
+  G: IOTAProjectGroup;
+  I, J: Integer;
+  F: string;
+begin
+  Result := FileName;
+  if (FileName = '') or (ExtractFilePath(FileName) <> '') then
+    Exit;
+  MS := BorlandIDEServices as IOTAModuleServices;
+  for I := 0 to MS.ModuleCount - 1 do
+    if SameText(ExtractFileName(MS.Modules[I].FileName), FileName) then
+      Exit(MS.Modules[I].FileName);
+  G := MS.MainProjectGroup;
+  if G <> nil then
+    for I := 0 to G.ProjectCount - 1 do
+      for J := 0 to G.Projects[I].GetModuleCount - 1 do
+      begin
+        F := G.Projects[I].GetModule(J).FileName;
+        if SameText(ExtractFileName(F), FileName) then
+          Exit(F);
+      end;
+end;
+
+function ThreadFile(const T: IOTAThread): string;
+begin
+  Result := FullSourcePath(T.CurrentFile);
 end;
 
 function IsStopped(const P: IOTAProcess): Boolean;
@@ -229,6 +298,24 @@ begin
       Result := D.QualifiedName; // the last (innermost) match wins
 end;
 
+function SafeCallPos(const Thread: IOTAThread; Index: Integer; out FileName: string; out Line: Integer): Boolean;
+begin
+  // The 64-bit IDE's debugger (TGDBThread.GetCallLocation) can hand back a frame with a broken
+  // string and raise an access violation copying it; the frames after it are not worth reading.
+  try
+    Thread.GetCallPos(Index, FileName, Line);
+    Result := True;
+  except
+    on E: Exception do
+    begin
+      Log(Format('Call stack frame %d: %s', [Index, E.Message]));
+      FileName := '';
+      Line := 0;
+      Result := False;
+    end;
+  end;
+end;
+
 function CallStackJson(const Thread: IOTAThread; MaxFrames: Integer): TJSONArray;
 var
   State: TOTACallStackState;
@@ -252,11 +339,27 @@ begin
       Exit;
     for I := 0 to Min(Thread.CallCount, MaxFrames) - 1 do
     begin
-      Frame := TJSONObject.Create;
-      Frame.AddPair('index', TJSONNumber.Create(I));
       // Not Thread.CallHeaders: formatting the headers (with parameter values) makes the Delphi 13
       // debugger kernel assert ("item.src" in DBKIMPL.CPP). The routine comes from the source.
-      Thread.GetCallPos(I, FileName, Line);
+      if not SafeCallPos(Thread, I, FileName, Line) then
+      begin
+        // The current location still reads right: at least the frame that stopped.
+        if (Result.Count = 0) and (Thread.CurrentFile <> '') then
+        begin
+          FileName := ThreadFile(Thread);
+          Frame := TJSONObject.Create;
+          Frame.AddPair('index', TJSONNumber.Create(0));
+          Frame.AddPair('call', RoutineAt(FileName, Thread.CurrentLine));
+          Frame.AddPair('file', FileName);
+          Frame.AddPair('line', TJSONNumber.Create(Thread.CurrentLine));
+          Frame.AddPair('note', 'The IDE''s debugger did not give the rest of the call stack (see its Call Stack view).');
+          Result.Add(Frame);
+        end;
+        Break;
+      end;
+      Frame := TJSONObject.Create;
+      Frame.AddPair('index', TJSONNumber.Create(I));
+      FileName := FullSourcePath(FileName);
       if FileName <> '' then
       begin
         Routine := RoutineAt(FileName, Line);
@@ -288,6 +391,8 @@ begin
     Result.AddPair('message', Value);
 end;
 
+function IsLogpointStop(const P: IOTAProcess): Boolean; forward;
+
 function DebugStateJson(MaxFrames, Context: Integer): TJSONObject;
 var
   P: IOTAProcess;
@@ -311,6 +416,14 @@ begin
   Result.AddPair('location', P.Location);
   if not IsStopped(P) then
     Exit;
+  // A logpoint's stop is its own: reading the threads now would get in its way (and the 64-bit IDE's
+  // debugger returns garbage for a stack read while it evaluates), and the program runs on by itself.
+  if IsLogpointStop(P) then
+  begin
+    Result.AddPair('logpoint', TJSONBool.Create(True));
+    Result.AddPair('note', 'Stopped for a moment by a logpoint that is recording; the program runs on by itself.');
+    Exit;
+  end;
 
   T := P.CurrentThread;
   if T <> nil then
@@ -323,9 +436,9 @@ begin
     Th.AddPair('location', T.Location);
     if T.CurrentFile <> '' then
     begin
-      Th.AddPair('file', T.CurrentFile);
+      Th.AddPair('file', ThreadFile(T));
       Th.AddPair('line', TJSONNumber.Create(T.CurrentLine));
-      Th.AddPair('source', SourceSnippet(T.CurrentFile, T.CurrentLine, Context));
+      Th.AddPair('source', SourceSnippet(ThreadFile(T), T.CurrentLine, Context));
     end;
     Th.AddPair('callStack', CallStackJson(T, MaxFrames));
     Result.AddPair('currentThread', Th);
@@ -400,7 +513,6 @@ begin
   end;
 end;
 
-function IsLogpointStop(const P: IOTAProcess): Boolean; forward;
 function LogpointIdOf(const B: IOTABreakpoint): Integer; forward;
 
 function BreakpointJson(const B: IOTABreakpoint): TJSONObject;
@@ -484,7 +596,9 @@ type
     FSawProcess: Boolean;
     FUntilRunning: Boolean; // start without waitSec: done once the program runs
     FStoppedTicks: Integer; // consecutive ticks in the stopped state
+    FLoadTicks: Integer;    // ticks a starting process has looked stopped
     FAction: string;
+    FCompiles: Integer;     // compiles seen when the wait began
     procedure Tick(Sender: TObject);
     procedure DoTick;
     procedure Finish(const Note: string);
@@ -496,11 +610,60 @@ type
 var
   PendingWait: TStopWait;
 
+type
+  { Counts the IDE's compiles (Run compiles first) and remembers whether the last one succeeded,
+    so a start whose build failed is answered at once instead of waiting for a process. }
+  TCompileWatch = class(TNotifierObject, IOTAIDENotifier, IOTAIDENotifier50)
+  public
+    procedure FileNotification(NotifyCode: TOTAFileNotification; const FileName: string; var Cancel: Boolean);
+    procedure BeforeCompile(const Project: IOTAProject; var Cancel: Boolean); overload;
+    procedure AfterCompile(Succeeded: Boolean); overload;
+    procedure BeforeCompile(const Project: IOTAProject; IsCodeInsight: Boolean; var Cancel: Boolean); overload;
+    procedure AfterCompile(Succeeded: Boolean; IsCodeInsight: Boolean); overload;
+  end;
+
+var
+  CompileWatchIndex: Integer = -1;
+  Compiles: Integer;
+  LastCompileFailed: Boolean;
+
+procedure TCompileWatch.FileNotification(NotifyCode: TOTAFileNotification; const FileName: string;
+  var Cancel: Boolean);
+begin
+end;
+
+procedure TCompileWatch.BeforeCompile(const Project: IOTAProject; var Cancel: Boolean);
+begin
+end;
+
+procedure TCompileWatch.AfterCompile(Succeeded: Boolean);
+begin
+end;
+
+procedure TCompileWatch.BeforeCompile(const Project: IOTAProject; IsCodeInsight: Boolean; var Cancel: Boolean);
+begin
+end;
+
+procedure TCompileWatch.AfterCompile(Succeeded: Boolean; IsCodeInsight: Boolean);
+begin
+  if IsCodeInsight then
+    Exit;
+  Inc(Compiles);
+  LastCompileFailed := not Succeeded;
+end;
+
+procedure WatchCompiles;
+begin
+  if CompileWatchIndex < 0 then
+    CompileWatchIndex := (BorlandIDEServices as IOTAServices).AddNotifier(TCompileWatch.Create);
+end;
+
 constructor TStopWait.Create(const Action: string; WaitSec: Integer; const Done: TToolDone);
 begin
   inherited Create;
   FAction := Action;
   FDone := Done;
+  FCompiles := Compiles;
   FStartedAt := Now;
   FDeadline := IncSecond(Now, WaitSec);
   FTimer := TTimer.Create(nil);
@@ -529,7 +692,7 @@ begin
   if Note <> '' then
     Obj.AddPair('note', Note);
   // Free after the callback: this object's timer is on the call stack.
-  TThread.ForceQueue(nil,
+  System.Classes.TThread.ForceQueue(nil,
     procedure
     begin
       Free;
@@ -551,7 +714,30 @@ end;
 procedure TStopWait.DoTick;
 var
   P: IOTAProcess;
+  Dialog: string;
+  Done: TToolDone;
 begin
+  Dialog := ExceptionDialogText;
+  if Dialog <> '' then
+  begin
+    FTimer.Enabled := False;
+    Done := FDone;
+    FDone := nil;
+    if PendingWait = Self then
+      PendingWait := nil;
+    System.Classes.TThread.ForceQueue(nil,
+      procedure
+      begin
+        Free;
+      end);
+    if Assigned(Done) then
+      Done(TToolResult.Json(TJSONObject.Create.AddPair('state', 'exception').AddPair('action', FAction)
+        .AddPair('exception', Dialog)
+        .AddPair('note', 'The IDE shows its Debugger Exception Notification. Until the user answers it (Break ' +
+          'keeps the program stopped for inspection, Continue lets it handle the exception), the debugger ' +
+          'cannot be queried. Ask the user, then call getDebugState.')));
+    Exit;
+  end;
   P := CurrentProcess;
   if (P = nil) or (P.ProcessState in [psTerminated, psNoProcess, psNothing]) then
   begin
@@ -559,6 +745,12 @@ begin
     if FSawProcess then
     begin
       Finish('The process ended');
+      Exit;
+    end;
+    if (FAction = 'start') and LastCompileFailed and (Compiles > FCompiles) then
+    begin
+      Finish('The build failed, so nothing was started: see the errors with buildProject (the IDE shows them in ' +
+        'the Messages view).');
       Exit;
     end;
     if Now >= FDeadline then
@@ -577,9 +769,16 @@ begin
   // threads or call stacks then breaks the kernel ("Invalid debugger request"). Wait until it runs.
   if (FAction = 'start') and not FSawRunning and (P.ProcessState <> psRunning) then
   begin
-    if Now >= FDeadline then
-      Finish('The program did not start running');
-    Exit;
+    // The 64-bit IDE (lldb) may go from loading straight to a stop: a stop that stays has run.
+    Inc(FLoadTicks);
+    if (SizeOf(Pointer) = 8) and IsStopped(P) and (FLoadTicks >= 5) then
+      FSawRunning := True
+    else
+    begin
+      if Now >= FDeadline then
+        Finish('The program did not start running');
+      Exit;
+    end;
   end;
   if P.ProcessState = psRunning then
     FSawRunning := True
@@ -721,6 +920,7 @@ type
     FTimer: TTimer;
     FNextId: Integer;
     FStopTicks: Integer; // consecutive ticks the process has been stopped
+    FWarmTicks: Integer; // 64-bit IDE: ticks a new process has been stopped
     FRunningPid: Cardinal; // the process seen running; a new one is not touched until it runs
     FBusy: Boolean;
     // A hit whose call stack is still being read: the stack becomes accessible only after the
@@ -878,7 +1078,7 @@ begin
   if (T = nil) or (T.CurrentFile = '') then
     Exit;
   for X in FItems do
-    if not X.Exhausted and (X.Line = Integer(T.CurrentLine)) and SameFileName(X.FileName, T.CurrentFile) then
+    if not X.Exhausted and (X.Line = Integer(T.CurrentLine)) and SameFileName(X.FileName, ThreadFile(T)) then
       Exit(X);
 end;
 
@@ -925,7 +1125,17 @@ begin
     for I := 0 to System.Math.Min(T.CallCount, LP.StackFrames) - 1 do
     begin
       // Not CallHeaders (see CallStackJson).
-      T.GetCallPos(I, FileName, Line);
+      if not SafeCallPos(T, I, FileName, Line) then
+      begin
+        // Such a thread stays unreadable for the whole stop (see CallStackJson): the stopped frame only.
+        if (I = 0) and (T.CurrentFile <> '') then
+        begin
+          FileName := ThreadFile(T);
+          H.Stack := [Format('%s (%s:%d)', [RoutineAt(FileName, T.CurrentLine), ExtractFileName(FileName),
+            T.CurrentLine]), '(the IDE''s debugger did not give the rest of the call stack)'];
+        end;
+        Break;
+      end;
       if FileName <> '' then
         S := Format('%s (%s:%d)', [RoutineAt(FileName, Line), ExtractFileName(FileName), Line])
       else
@@ -952,8 +1162,10 @@ procedure TLogpoints.Tick(Sender: TObject);
 var
   P: IOTAProcess;
   X: TLogpoint;
+  Hit: TLogHit;
+  Done: Boolean;
 begin
-  if FBusy then
+  if FBusy or (ExceptionDialogText <> '') then
     Exit;
   FBusy := True;
   try
@@ -976,16 +1188,45 @@ begin
         end;
         Inc(FStackTicks);
         // See STOP_SETTLE_TICKS: not while the IDE is still updating its views for this stop.
-        if (FStackTicks >= STOP_SETTLE_TICKS) and (TryReadStack(FStackOf, P, FStackHit) or (FStackTicks > 30)) then
+        if FStackTicks < STOP_SETTLE_TICKS then
+          Exit;
+        try
+          Done := TryReadStack(FStackOf, P, FStackHit) or (FStackTicks > 30);
+        except
+          on E: Exception do
+          begin
+            // The 64-bit IDE's debugger can fail here; the values still count.
+            Log('Logpoint call stack: ' + E.Message);
+            FStackHit.Stack := ['(call stack unavailable)'];
+            Done := True;
+          end;
+        end;
+        if Done and (FStackHit.Stack = nil) then
+          FStackHit.Stack := ['(call stack unavailable)'];
+        if Done then
         begin
+          // The values after the stack: evaluating first changes the thread under the 64-bit IDE's
+          // debugger, and the stack read then gets garbage.
           X := FStackOf;
           FStackOf := nil;
-          FinishHit(X, FStackHit, P);
+          Hit := RecordValues(X, P);
+          Hit.Stack := FStackHit.Stack;
+          FinishHit(X, Hit, P);
         end;
         Exit;
       end;
       if P.ProcessState = psRunning then
         FRunningPid := P.OSProcessId;
+      // The 64-bit IDE debugs through lldb, which does not report "running" in between: a process that
+      // stays stopped for a moment has run (the 32-bit kernel's loading stops must not be queried).
+      if (SizeOf(Pointer) = 8) and (FRunningPid <> P.OSProcessId) and IsStopped(P) then
+      begin
+        Inc(FWarmTicks);
+        if FWarmTicks >= 5 then
+          FRunningPid := P.OSProcessId;
+      end
+      else
+        FWarmTicks := 0;
       // Not before the program has run: while the kernel loads it, it only looks stopped.
       if not IsStopped(P) or (FRunningPid <> P.OSProcessId) then
       begin
@@ -1000,14 +1241,14 @@ begin
       if X = nil then
         Exit;
       FStopTicks := 0;
-      FStackHit := RecordValues(X, P);
       if X.StackFrames > 0 then
       begin
+        FStackHit := Default(TLogHit);
         FStackOf := X;
         FStackTicks := 0;
       end
       else
-        FinishHit(X, FStackHit, P);
+        FinishHit(X, RecordValues(X, P), P);
     except
       on E: Exception do
         Log('Logpoint: ' + E.Message);
@@ -1183,12 +1424,60 @@ begin
     end;
 end;
 
+{ The 64-bit IDE's debugger reads the symbols from the executable: without "debug information in exe"
+  it binds no breakpoints (logpoints included) and the program just runs. }
+function DebugInfoWarning(const Project: IOTAProject): string;
+var
+  Configs: IOTAProjectOptionsConfigurations;
+  Cfg: IOTABuildConfiguration;
+begin
+  Result := '';
+  if SizeOf(Pointer) = 4 then
+    Exit;
+  if Supports(Project.ProjectOptions, IOTAProjectOptionsConfigurations, Configs) and
+     (Configs.ActiveConfiguration <> nil) then
+  begin
+    Cfg := Configs.ActiveConfiguration.PlatformConfiguration[Project.CurrentPlatform];
+    if Cfg = nil then
+      Cfg := Configs.ActiveConfiguration;
+    if SameText(Cfg.GetValue('DCC_DebugInfoInExe', True), 'true') then
+      Exit;
+  end;
+  Result := 'The 64-bit IDE''s debugger needs the symbols in the executable: breakpoints and logpoints are not ' +
+    'hit until Project Options > Building > Delphi Compiler > Linking > "Include debug information in exe" is on.';
+end;
+
 procedure StartDebugging(const Project: IOTAProject; const Params: string; WaitSec: Integer; const Done: TToolDone);
 var
   P: IOTAProcess;
   Action: TCustomAction;
   Group: IOTAProjectGroup;
+  Warning: string;
+  Answer: TToolDone;
 begin
+  Warning := DebugInfoWarning(Project);
+  Answer := Done;
+  if Warning <> '' then
+    // Into the JSON of the answer, so it stays one object.
+    Answer :=
+      procedure(const R: TToolResult)
+      var
+        V: TJSONValue;
+      begin
+        V := nil;
+        if not R.IsError and (Length(R.Texts) > 0) then
+          V := TJSONObject.ParseJSONValue(R.Texts[0]);
+        if V is TJSONObject then
+        begin
+          TJSONObject(V).AddPair('warning', Warning);
+          Done(TToolResult.Json(V));
+        end
+        else
+        begin
+          V.Free;
+          Done(R);
+        end;
+      end;
   P := CurrentProcess;
   if (P <> nil) and not (P.ProcessState in [psTerminated, psNoProcess, psNothing]) then
   begin
@@ -1223,14 +1512,19 @@ begin
     Done(TToolResult.Error('The IDE''s Run command is disabled right now (a build or another session running?)'));
     Exit;
   end;
+  WatchCompiles;
+  // The wait exists before Run: when the build fails, Execute stays in the IDE's modal compile
+  // dialog (it shows the errors until OK), and the wait's timer answers from inside that loop.
+  PendingWait := TStopWait.Create('start', System.Math.Max(WaitSec, 300), Answer);
   Action.Execute;
-  // The IDE compiles first, so the process appears only after a while.
-  PendingWait := TStopWait.Create('start', System.Math.Max(WaitSec, 300), Done);
   PendingWait.FUntilRunning := WaitSec <= 0;
 end;
 
 procedure ShutdownDebugTools;
 begin
+  if CompileWatchIndex >= 0 then
+    (BorlandIDEServices as IOTAServices).RemoveNotifier(CompileWatchIndex);
+  CompileWatchIndex := -1;
   CancelDebugWaits;
   FreeAndNil(Logpoints);
 end;

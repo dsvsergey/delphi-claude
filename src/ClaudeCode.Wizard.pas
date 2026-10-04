@@ -243,6 +243,8 @@ procedure TClaudeCodeWizard.StartServer;
 begin
   try
     FMcp.Start;
+    // The --settings file as the settings want it (hooks, status line), also for claude started elsewhere.
+    ClaudeExtraArgs;
   except
     on E: Exception do
       AddLog('Failed to start server: ' + E.Message);
@@ -1481,6 +1483,7 @@ begin
     SaveSettings(S);
     FBackend.Sync.Enabled := S.SyncEditor;
     FBackend.InlineDiff := S.InlineDiff;
+    ClaudeExtraArgs; // rewrites the --settings file
   end;
 end;
 

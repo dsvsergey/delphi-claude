@@ -401,7 +401,8 @@ begin
   Report := ApplyRestorePlan(Plan);
   FTimeline.DropFrom(Index);
   Log('Timeline rewind:' + sLineBreak + Report);
-  ShowMessage(Report);
+  // A titled box: ShowMessage's has the IDE's own title (and is a task dialog in the 64-bit IDE).
+  Application.MessageBox(PChar(Report), 'Claude Timeline: Rewind', MB_OK or MB_ICONINFORMATION);
 end;
 
 procedure TTimelineForm.ClearClick(Sender: TObject);
