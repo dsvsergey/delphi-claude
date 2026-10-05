@@ -48,6 +48,8 @@ uses
 
 const
   WM_RUN_QUEUED = WM_APP + 77;
+  // Timer id of the dispatcher's watchdog (task timers count up from 1).
+  WATCHDOG_TIMER = High(Integer);
 
 type
   TMainLoopDispatcher = class
@@ -75,10 +77,13 @@ begin
   FTimers := TDictionary<UIntPtr, System.SysUtils.TProc>.Create;
   FNextTimer := 1;
   FWnd := AllocateHWnd(WndProc);
+  // Restarts the queue if all its messages were lost (see WndProc); WM_TIMER is never dropped.
+  SetTimer(FWnd, WATCHDOG_TIMER, 500, nil);
 end;
 
 destructor TMainLoopDispatcher.Destroy;
 begin
+  KillTimer(FWnd, WATCHDOG_TIMER);
   DeallocateHWnd(FWnd);
   FTimers.Free;
   FQueue.Free;
@@ -103,6 +108,17 @@ var
 begin
   if Msg.Msg = WM_TIMER then
   begin
+    if Msg.WParam = WATCHDOG_TIMER then
+    begin
+      FLock.Enter;
+      try
+        if FQueue.Count > 0 then
+          PostMessage(FWnd, WM_RUN_QUEUED, 0, 0);
+      finally
+        FLock.Leave;
+      end;
+      Exit;
+    end;
     KillTimer(FWnd, Msg.WParam);
     if FTimers.TryGetValue(Msg.WParam, Proc) then
     begin
@@ -122,11 +138,16 @@ begin
     Exit;
   end;
   // One item per message, so a long-running item never starves the rest of the message loop.
+  // The next item gets a message of its own: one posted with it may have been lost, removed by a
+  // modal loop of the IDE (Delphi 10 Seattle's Error Insight drops them), and without it the
+  // queue would only move one item per later request.
   FLock.Enter;
   try
     if FQueue.Count = 0 then
       Exit;
     Proc := FQueue.Dequeue();
+    if FQueue.Count > 0 then
+      PostMessage(FWnd, WM_RUN_QUEUED, 0, 0);
   finally
     FLock.Leave;
   end;

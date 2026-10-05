@@ -811,6 +811,7 @@ end;
 function TDelphiIdeBackend.ToolGetDiagnostics(Args: TJSONObject): TToolResult;
 const
   SeverityName: array[0..3] of string = ('Error', 'Error', 'Warning', 'Information');
+  ALL_FILES_BUDGET_MS = 10000;
 var
   Files: TList<string>;
   It: IOTAEditBufferIterator;
@@ -826,7 +827,10 @@ var
   Explicit: Boolean;
   Buffer: IOTAEditBuffer;
   View: IOTAEditView;
+  Start: Cardinal;
+  Checked: Integer;
 begin
+  Checked := 0;
   Res := TJSONArray.Create;
   Files := TList<string>.Create;
   try
@@ -838,9 +842,26 @@ begin
       for I := 0 to It.Count - 1 do
         if It.EditBuffers[I].FileName <> '' then
           Files.Add(It.EditBuffers[I].FileName);
+    // The active file first: within the time budget it is the one that matters most.
+    if not Explicit and (EditorServices.TopBuffer <> nil) then
+    begin
+      I := Files.IndexOf(EditorServices.TopBuffer.FileName);
+      if I > 0 then
+        Files.Move(I, 0);
+    end;
 
+    Start := GetTickCount;
     for F in Files do
     begin
+      // Error Insight of older IDEs (Delphi 10 Seattle) parses each file synchronously, about two
+      // seconds a file in a large project, with the IDE frozen meanwhile.
+      if not Explicit and (GetTickCount - Start > ALL_FILES_BUDGET_MS) then
+      begin
+        Log(Format('getDiagnostics: %d of %d open files not checked (over %d ms)',
+          [Files.Count - Checked, Files.Count, ALL_FILES_BUDGET_MS]));
+        Break;
+      end;
+      Inc(Checked);
       Diags := TJSONArray.Create;
       Module := ModuleServices.FindModule(F);
       if (Module <> nil) and Supports(Module, IOTAModuleErrors, ModErrors) then
