@@ -8,7 +8,7 @@ unit ClaudeCode.FormTools;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ToolsAPI, DesignIntf, ClaudeCode.Mcp;
+  System.SysUtils, System.Classes, System.JSON, ToolsAPI, DesignIntf, ClaudeCode.Mcp, ClaudeCode.Compat;
 
 function ToolGetFormComponents(Args: TJSONObject): TToolResult;
 function ToolGetSelectedComponents(Args: TJSONObject): TToolResult;

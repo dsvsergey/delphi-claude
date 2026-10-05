@@ -7,7 +7,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.JSON, Vcl.Forms, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build,
-  ClaudeCode.EditorSync, ClaudeCode.Process, ClaudeCode.TestRunner, ClaudeCode.Timeline;
+  ClaudeCode.EditorSync, ClaudeCode.Process, ClaudeCode.TestRunner, ClaudeCode.Timeline, ClaudeCode.CompatIde;
 
 { Gives a form of ours the IDE theme (its class is registered first: unregistered classes stay unthemed). }
 procedure ThemeIdeForm(F: TForm);
@@ -857,7 +857,11 @@ begin
           Range.AddPair('end', PosJson(E.Stop.Line - 1, LspCharacter(View, E.Stop)));
           Diag := TJSONObject.Create;
           Diag.AddPair('message', E.Text);
+          {$IF CompilerVersion >= 31.0}
           Diag.AddPair('severity', SeverityName[EnsureRange(E.Severity, 0, 3)]);
+          {$ELSE}
+          Diag.AddPair('severity', SeverityName[0]); // Error Insight reports no severity here
+          {$IFEND}
           Diag.AddPair('range', Range);
           Diag.AddPair('source', 'Delphi Error Insight');
           Diags.Add(Diag);
@@ -1172,7 +1176,7 @@ var
   Ext: string;
 begin
   Result := '';
-  for Ext in ['.dpr', '.dpk'] do
+  for Ext in TArray<string>.Create('.dpr', '.dpk') do
     if ReadSourceText(ChangeFileExt(P.FileName, Ext), Result) then
       Exit;
 end;
@@ -1462,7 +1466,7 @@ begin
     M.Text := S.Text;
     Sources := Sources + [M];
     if S.FormKind <> '' then
-      for Form in [ChangeFileExt(S.FileName, '.dfm'), ChangeFileExt(S.FileName, '.fmx')] do
+      for Form in TArray<string>.Create(ChangeFileExt(S.FileName, '.dfm'), ChangeFileExt(S.FileName, '.fmx')) do
         if FileExists(Form) and ReadSourceText(Form, M.Text) then
         begin
           M.FileName := Form;
@@ -1573,8 +1577,8 @@ begin
       Exit(TToolResult.Error('Pass "file" (the FastMM log) or open a project'));
     Exe := P.ProjectOptions.TargetName;
     // FastMM4 and FastMM5 write <program>_MemoryManager_EventLog.txt next to the program.
-    for Candidate in [ChangeFileExt(Exe, '') + '_MemoryManager_EventLog.txt',
-      Exe + '_MemoryManager_EventLog.txt'] do
+    for Candidate in TArray<string>.Create(ChangeFileExt(Exe, '') + '_MemoryManager_EventLog.txt',
+      Exe + '_MemoryManager_EventLog.txt') do
       if FileExists(Candidate) then
         FileName := Candidate;
     if FileName = '' then

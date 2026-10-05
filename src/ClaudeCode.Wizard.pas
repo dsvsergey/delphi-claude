@@ -19,7 +19,7 @@ uses
   ClaudeCode.DebugTools, ClaudeCode.ContextMenus, ClaudeCode.SettingsForm, ClaudeCode.ClaudeMd,
   ClaudeCode.ProjectMap, ClaudeCode.ProjectMapForm, ClaudeCode.CodeTools, ClaudeCode.Prompts,
   ClaudeCode.ModernizeForm, ClaudeCode.TimelineForm,
-  System.IOUtils;
+  System.IOUtils, ClaudeCode.CompatIde;
 
 const
   DEFAULT_PANEL_COMMAND = 'claude';
@@ -307,8 +307,8 @@ function UserHasStatusLine(const Dir: string): Boolean;
 var
   F, Text: string;
 begin
-  for F in [TPath.Combine(ClaudeConfigDir, 'settings.json'), TPath.Combine(Dir, '.claude\settings.json'),
-    TPath.Combine(Dir, '.claude\settings.local.json')] do
+  for F in TArray<string>.Create(TPath.Combine(ClaudeConfigDir, 'settings.json'), TPath.Combine(Dir, '.claude\settings.json'),
+    TPath.Combine(Dir, '.claude\settings.local.json')) do
     if FileExists(F) and ReadTextFileAutoEnc(F, Text) and (Pos('"statusLine"', Text) > 0) then
       Exit(True);
   Result := False;

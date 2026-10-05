@@ -7,7 +7,7 @@ unit ClaudeCode.TestRunner;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON;
+  System.SysUtils, System.Classes, System.JSON, ClaudeCode.Compat;
 
 type
   TTestStatus = (tsPassed, tsFailed, tsError, tsIgnored);
@@ -376,6 +376,10 @@ begin
   if Filter <> '' then
     Cmd := Cmd + ' ' + QuoteArg('--run:' + Filter);
   P := RunProcess(Cmd, ExtractFilePath(Exe), TimeoutSec, Cancelled);
+  // Older DUnitX (Delphi 10 Seattle and before) has no --consolemode and stops on it.
+  if (P.Error = '') and not FileExists(XmlFile) and
+     P.Output.Contains('Unknown command line option') and P.Output.Contains('consolemode') then
+    P := RunProcess(StringReplace(Cmd, ' --consolemode:Quiet', '', []), ExtractFilePath(Exe), TimeoutSec, Cancelled);
   Result.Error := P.Error;
   Result.ExitCode := P.ExitCode;
   Result.TimedOut := P.TimedOut;

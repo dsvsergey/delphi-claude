@@ -16,12 +16,19 @@ var
   Results: IRunResults;
 begin
   try
+    // Older DUnitX (Delphi 10 Seattle) waits for Enter at the end by default.
+    TDUnitX.Options.ExitBehavior := TDUnitXExitBehavior.Continue;
     TDUnitX.CheckCommandLine;
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.FailsOnNoAsserts := False;
+    {$IF Declared(TDunitXConsoleMode)}
     if TDUnitX.Options.ConsoleMode <> TDunitXConsoleMode.Off then
       Runner.AddLogger(TDUnitXConsoleLogger.Create(TDUnitX.Options.ConsoleMode = TDunitXConsoleMode.Quiet));
+    {$ELSE}
+    // Older DUnitX (Delphi 10 Seattle) has no --consolemode.
+    Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
+    {$IFEND}
     Runner.AddLogger(TDUnitXXMLNUnitFileLogger.Create(TDUnitX.Options.XMLOutputFile));
     Results := Runner.Execute;
     if not Results.AllPassed then

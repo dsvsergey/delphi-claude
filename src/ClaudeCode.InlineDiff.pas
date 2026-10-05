@@ -29,6 +29,8 @@ procedure ShutdownInlineReviews;
 
 implementation
 
+{$IF CompilerVersion >= 35.0} // the code editor API (ToolsAPI.Editor) is Delphi 11 and later
+
 uses
   Winapi.Windows, System.Types, System.Math, System.Generics.Collections, System.UITypes, Vcl.Graphics,
   Vcl.Controls, Vcl.ExtCtrls, Vcl.StdCtrls, Vcl.Forms, ToolsAPI.Editor,
@@ -751,5 +753,30 @@ begin
   RemovePainterIfIdle;
   FreeAndNil(Reviews);
 end;
+
+{$ELSE}
+
+// No code editor API: proposals always go to the diff window.
+
+function StartInlineReview(const TabName, FileName, NewText: string; const OnDecision: TInlineDecision): Boolean;
+begin
+  Result := False;
+end;
+
+function RejectInlineReview(const TabName: string): Boolean;
+begin
+  Result := False;
+end;
+
+function RejectAllInlineReviews: Integer;
+begin
+  Result := 0;
+end;
+
+procedure ShutdownInlineReviews;
+begin
+end;
+
+{$IFEND}
 
 end.

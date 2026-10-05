@@ -291,7 +291,7 @@ begin
   try
     for P in Projects do
     begin
-      for Ext in ['.dpr', '.dpk'] do
+      for Ext in TArray<string>.Create('.dpr', '.dpk') do
         if FileExists(ChangeFileExt(P.FileName, Ext)) then
           Add(ChangeFileExt(P.FileName, Ext), '');
       for I := 0 to P.GetModuleCount - 1 do

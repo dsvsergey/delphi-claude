@@ -339,8 +339,10 @@ var
   PM: IOTAProjectManager;
   MS: IOTAMessageServices;
 begin
+  {$IF Declared(cEdMenuCatClipboard)}
   if FEditorMenuRegistered then
     (BorlandIDEServices as IOTAEditorServices).GetEditorLocalMenu.UnregisterActionList(EDITOR_MENU_CATEGORY);
+  {$IFEND}
   if (FProjectNotifier >= 0) and Supports(BorlandIDEServices, IOTAProjectManager, PM) then
     PM.RemoveMenuItemCreatorNotifier(FProjectNotifier);
   if (FMessageNotifier >= 0) and Supports(BorlandIDEServices, IOTAMessageServices, MS) then
@@ -381,9 +383,14 @@ begin
   Add('Add XML Documentation', ecDoc, Sub);
   Add('Ask Claude About This...', ecAsk, Sub);
   Add('Explain This Value (debugger)', ecExplainValue, Sub);
+  {$IF Declared(cEdMenuCatClipboard)}
   (BorlandIDEServices as IOTAEditorServices).GetEditorLocalMenu.RegisterActionList(FEditorActions,
     EDITOR_MENU_CATEGORY, cEdMenuCatClipboard);
   FEditorMenuRegistered := True;
+  {$ELSE}
+  // No INTAEditorLocalMenu in this IDE version: the editor popup gets no Claude items.
+  Log('Editor menu not available in this IDE version');
+  {$IFEND}
 end;
 
 { The editor menu is an ActionBand popup: the handlers may get the IDE's own copy of the

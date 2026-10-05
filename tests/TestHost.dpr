@@ -281,7 +281,7 @@ begin
   if TDirectory.Exists(Tmp) then
     TDirectory.Delete(Tmp, True);
   TDirectory.CreateDirectory(Tmp);
-  for F in ['BuildSample.dproj', 'BuildSample.dpr', 'SampleUnit.pas'] do
+  for F in TArray<string>.Create('BuildSample.dproj', 'BuildSample.dpr', 'SampleUnit.pas') do
     TFile.Copy(TPath.Combine(Src, F), TPath.Combine(Tmp, F));
 
   Req.RsVars := GetEnvironmentVariable('BDS_RSVARS');
@@ -821,7 +821,7 @@ begin
   Lsp := TDelphiLsp.Create(TPath.Combine(Bds, 'bin\DelphiLSP.exe'));
   try
     Files := TJSONArray.Create;
-    for U in ['OrderLogic', 'MainForm', 'OrdersData'] do
+    for U in TArray<string>.Create('OrderLogic', 'MainForm', 'OrdersData') do
       Files.Add(TJSONObject.Create.AddPair('name', U).AddPair('file', LspUri(TPath.Combine(Dir, U + '.pas'))));
     Settings.AddPair('project', LspUri(TPath.Combine(Dir, 'OrdersApp.dproj')));
     Settings.AddPair('dllname', 'dcc32370.dll');

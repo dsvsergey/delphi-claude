@@ -9,7 +9,7 @@ unit ClaudeCode.Mcp;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ClaudeCode.WebSocket;
+  System.SysUtils, System.Classes, System.JSON, ClaudeCode.Compat, ClaudeCode.WebSocket;
 
 type
   TToolResult = record

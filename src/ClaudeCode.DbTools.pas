@@ -311,7 +311,7 @@ begin
          (Typ.ToLower.Contains('char') or Typ.ToLower.Contains('binary')) then
         Typ := Format('%s(%d)', [Typ, Len]);
       S := S + ' ' + Typ;
-      if TArray.Contains<string>(Keys, LowerCase(FieldText(DS, 'COLUMN_NAME'))) then
+      if MatchStr(LowerCase(FieldText(DS, 'COLUMN_NAME')), Keys) then
         S := S + ' PK';
       Attrs := StrToIntDef(FieldText(DS, 'COLUMN_ATTRIBUTES'), 0);
       if Attrs and ATTR_AUTO_INC <> 0 then

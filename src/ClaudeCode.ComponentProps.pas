@@ -130,7 +130,7 @@ begin
     for I := 0 to Lines.Count - 1 do
     begin
       S := TrimLeft(Lines[I]);
-      for Head in ['object ', 'inherited ', 'inline '] do
+      for Head in TArray<string>.Create('object ', 'inherited ', 'inline ') do
         if S.StartsWith(Head + Name + ':', True) or SameText(S, Head + Name) then
         begin
           Indent := LeadingSpaces(Lines[I]);

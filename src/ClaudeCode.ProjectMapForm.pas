@@ -8,7 +8,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.JSON, Vcl.Forms, Vcl.Controls, Vcl.Graphics,
-  ClaudeCode.WebViewHost, ClaudeCode.ProjectMap;
+  ClaudeCode.WebViewHost, ClaudeCode.ProjectMap, ClaudeCode.CompatIde;
 
 type
   TProjectMapForm = class(TForm)
