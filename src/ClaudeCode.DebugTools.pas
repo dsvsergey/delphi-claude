@@ -8,7 +8,7 @@ unit ClaudeCode.DebugTools;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp;
+  System.SysUtils, System.Classes, System.JSON, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Compat;
 
 function ToolGetDebugState(Args: TJSONObject): TToolResult;
 function ToolEvaluateExpression(Args: TJSONObject): TToolResult;
@@ -160,8 +160,14 @@ type
     ResultText: string;
     ReturnCode: Integer;
     procedure ThreadNotify(Reason: TOTANotifyReason);
+    {$IF CompilerVersion < 31.0}
+    // Delphi 10 Seattle spells the IOTAThreadNotifier method this way.
+    procedure EvaluteComplete(const ExprStr, ResultStr: string; CanModify: Boolean;
+      ResultAddress, ResultSize: LongWord; ReturnCode: Integer);
+    {$ELSE}
     procedure EvaluateComplete(const ExprStr, ResultStr: string; CanModify: Boolean;
       ResultAddress, ResultSize: LongWord; ReturnCode: Integer); overload;
+    {$IFEND}
     procedure EvaluateComplete(const ExprStr, ResultStr: string; CanModify: Boolean;
       ResultAddress: TOTAAddress; ResultSize: LongWord; ReturnCode: Integer); overload;
     procedure ModifyComplete(const ExprStr, ResultStr: string; ReturnCode: Integer);
@@ -171,8 +177,13 @@ procedure TEvalWaiter.ThreadNotify(Reason: TOTANotifyReason);
 begin
 end;
 
+{$IF CompilerVersion < 31.0}
+procedure TEvalWaiter.EvaluteComplete(const ExprStr, ResultStr: string; CanModify: Boolean;
+  ResultAddress, ResultSize: LongWord; ReturnCode: Integer);
+{$ELSE}
 procedure TEvalWaiter.EvaluateComplete(const ExprStr, ResultStr: string; CanModify: Boolean;
   ResultAddress, ResultSize: LongWord; ReturnCode: Integer);
+{$IFEND}
 begin
   ResultText := ResultStr;
   Self.ReturnCode := ReturnCode;
@@ -609,6 +620,10 @@ type
 
 var
   PendingWait: TStopWait;
+  { True while the Run action executes. A failed build keeps it in the IDE's modal compile dialog
+    after the start was answered; Delphi 10 Seattle leaves Run enabled there, and a second Run from
+    inside that dialog crashes the IDE (access violation in TCustomForm.CloseModal). }
+  RunExecuting: Boolean;
 
 type
   { Counts the IDE's compiles (Run compiles first) and remembers whether the last one succeeded,
@@ -1454,6 +1469,7 @@ var
   Group: IOTAProjectGroup;
   Warning: string;
   Answer: TToolDone;
+  Wait: TStopWait;
 begin
   Warning := DebugInfoWarning(Project);
   Answer := Done;
@@ -1489,6 +1505,12 @@ begin
     Done(TToolResult.Error('Another debugControl call is still waiting'));
     Exit;
   end;
+  if RunExecuting then
+  begin
+    Done(TToolResult.Error('The IDE is still showing the compile dialog of the previous start; ' +
+      'the user closes it with OK (the errors are in buildProject and the Messages view)'));
+    Exit;
+  end;
   Action := RunAction;
   if Action = nil then
   begin
@@ -1515,9 +1537,17 @@ begin
   WatchCompiles;
   // The wait exists before Run: when the build fails, Execute stays in the IDE's modal compile
   // dialog (it shows the errors until OK), and the wait's timer answers from inside that loop.
-  PendingWait := TStopWait.Create('start', System.Math.Max(WaitSec, 300), Answer);
-  Action.Execute;
-  PendingWait.FUntilRunning := WaitSec <= 0;
+  Wait := TStopWait.Create('start', System.Math.Max(WaitSec, 300), Answer);
+  PendingWait := Wait;
+  RunExecuting := True;
+  try
+    Action.Execute;
+  finally
+    RunExecuting := False;
+  end;
+  // Answered (and freed) inside Execute when the build failed.
+  if PendingWait = Wait then
+    Wait.FUntilRunning := WaitSec <= 0;
 end;
 
 procedure ShutdownDebugTools;

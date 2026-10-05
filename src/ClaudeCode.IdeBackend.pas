@@ -7,7 +7,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.JSON, Vcl.Forms, ToolsAPI, ClaudeCode.Mcp, ClaudeCode.Build,
-  ClaudeCode.EditorSync, ClaudeCode.Process, ClaudeCode.TestRunner, ClaudeCode.Timeline;
+  ClaudeCode.EditorSync, ClaudeCode.Process, ClaudeCode.TestRunner, ClaudeCode.Timeline, ClaudeCode.CompatIde;
 
 { Gives a form of ours the IDE theme (its class is registered first: unregistered classes stay unthemed). }
 procedure ThemeIdeForm(F: TForm);
@@ -811,6 +811,7 @@ end;
 function TDelphiIdeBackend.ToolGetDiagnostics(Args: TJSONObject): TToolResult;
 const
   SeverityName: array[0..3] of string = ('Error', 'Error', 'Warning', 'Information');
+  ALL_FILES_BUDGET_MS = 10000;
 var
   Files: TList<string>;
   It: IOTAEditBufferIterator;
@@ -826,7 +827,10 @@ var
   Explicit: Boolean;
   Buffer: IOTAEditBuffer;
   View: IOTAEditView;
+  Start: Cardinal;
+  Checked: Integer;
 begin
+  Checked := 0;
   Res := TJSONArray.Create;
   Files := TList<string>.Create;
   try
@@ -838,9 +842,26 @@ begin
       for I := 0 to It.Count - 1 do
         if It.EditBuffers[I].FileName <> '' then
           Files.Add(It.EditBuffers[I].FileName);
+    // The active file first: within the time budget it is the one that matters most.
+    if not Explicit and (EditorServices.TopBuffer <> nil) then
+    begin
+      I := Files.IndexOf(EditorServices.TopBuffer.FileName);
+      if I > 0 then
+        Files.Move(I, 0);
+    end;
 
+    Start := GetTickCount;
     for F in Files do
     begin
+      // Error Insight of older IDEs (Delphi 10 Seattle) parses each file synchronously, about two
+      // seconds a file in a large project, with the IDE frozen meanwhile.
+      if not Explicit and (GetTickCount - Start > ALL_FILES_BUDGET_MS) then
+      begin
+        Log(Format('getDiagnostics: %d of %d open files not checked (over %d ms)',
+          [Files.Count - Checked, Files.Count, ALL_FILES_BUDGET_MS]));
+        Break;
+      end;
+      Inc(Checked);
       Diags := TJSONArray.Create;
       Module := ModuleServices.FindModule(F);
       if (Module <> nil) and Supports(Module, IOTAModuleErrors, ModErrors) then
@@ -857,7 +878,11 @@ begin
           Range.AddPair('end', PosJson(E.Stop.Line - 1, LspCharacter(View, E.Stop)));
           Diag := TJSONObject.Create;
           Diag.AddPair('message', E.Text);
+          {$IF CompilerVersion >= 31.0}
           Diag.AddPair('severity', SeverityName[EnsureRange(E.Severity, 0, 3)]);
+          {$ELSE}
+          Diag.AddPair('severity', SeverityName[0]); // Error Insight reports no severity here
+          {$IFEND}
           Diag.AddPair('range', Range);
           Diag.AddPair('source', 'Delphi Error Insight');
           Diags.Add(Diag);
@@ -1172,7 +1197,7 @@ var
   Ext: string;
 begin
   Result := '';
-  for Ext in ['.dpr', '.dpk'] do
+  for Ext in TArray<string>.Create('.dpr', '.dpk') do
     if ReadSourceText(ChangeFileExt(P.FileName, Ext), Result) then
       Exit;
 end;
@@ -1462,7 +1487,7 @@ begin
     M.Text := S.Text;
     Sources := Sources + [M];
     if S.FormKind <> '' then
-      for Form in [ChangeFileExt(S.FileName, '.dfm'), ChangeFileExt(S.FileName, '.fmx')] do
+      for Form in TArray<string>.Create(ChangeFileExt(S.FileName, '.dfm'), ChangeFileExt(S.FileName, '.fmx')) do
         if FileExists(Form) and ReadSourceText(Form, M.Text) then
         begin
           M.FileName := Form;
@@ -1573,8 +1598,8 @@ begin
       Exit(TToolResult.Error('Pass "file" (the FastMM log) or open a project'));
     Exe := P.ProjectOptions.TargetName;
     // FastMM4 and FastMM5 write <program>_MemoryManager_EventLog.txt next to the program.
-    for Candidate in [ChangeFileExt(Exe, '') + '_MemoryManager_EventLog.txt',
-      Exe + '_MemoryManager_EventLog.txt'] do
+    for Candidate in TArray<string>.Create(ChangeFileExt(Exe, '') + '_MemoryManager_EventLog.txt',
+      Exe + '_MemoryManager_EventLog.txt') do
       if FileExists(Candidate) then
         FileName := Candidate;
     if FileName = '' then

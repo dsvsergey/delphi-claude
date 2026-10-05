@@ -86,7 +86,7 @@ procedure DestroyAllDiffForms;
 implementation
 
 uses
-  System.Math, Vcl.Themes;
+  System.Math, Vcl.Themes, ClaudeCode.CompatIde;
 
 var
   GForms: TList<TClaudeDiffForm>;

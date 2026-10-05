@@ -322,6 +322,14 @@ Sections (comma-separated, all by default): `code`, `tests`, `forms`, `debug`, `
 `inline`, `timeline`, `prompts`. Open a copy of `tests/e2e`, not the folder itself: the test edits, restores and
 deletes files there, runs the program and clicks through IDE windows (Project Map, Claude Timeline, confirmations).
 
+A stress test of the read-only tools runs against any large project open in such an instance: outlines of every
+unit, references and modernization scans over the whole project, a build, 30 open editors, a burst of 40 parallel
+requests and repeated rounds while watching the IDE's memory and handles:
+
+```bat
+node tests/stress-test.mjs <port> <token> <bds.exe PID> [units to outline, default 300]
+```
+
 ## Limitations
 
 - `getDiagnostics` returns Error Insight (LSP) data for open files; use `buildProject` for real compiler output.

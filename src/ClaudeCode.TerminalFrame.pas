@@ -9,7 +9,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, System.NetEncoding,
   System.Generics.Collections, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.ExtCtrls,
-  Vcl.StdCtrls, Vcl.ComCtrls, ClaudeCode.WebViewHost, ClaudeCode.ConPty;
+  Vcl.StdCtrls, Vcl.ComCtrls, ClaudeCode.WebViewHost, ClaudeCode.ConPty, ClaudeCode.Compat;
 
 const
   WM_CC_HOSTKEY = WM_USER + 301;

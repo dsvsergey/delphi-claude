@@ -25,7 +25,7 @@ var
 begin
   O := TOrder.Create('A');
   try
-    Assert.AreEqual(Currency(0), O.CalcTotal);
+    Assert.AreEqual<Currency>(0, O.CalcTotal);
   finally
     O.Free;
   end;
@@ -39,7 +39,7 @@ begin
   try
     O.AddLine('Tea', 2, 3);
     O.AddLine('Cake', 1, 4);
-    Assert.AreEqual(Currency(10), O.CalcTotal, 'two lines');
+    Assert.AreEqual<Currency>(10, O.CalcTotal, 'two lines');
   finally
     O.Free;
   end;

@@ -7,7 +7,7 @@ unit ClaudeCode.Process;
 interface
 
 uses
-  System.SysUtils, System.Classes;
+  System.SysUtils, System.Classes, ClaudeCode.Compat;
 
 type
   TProcessResult = record

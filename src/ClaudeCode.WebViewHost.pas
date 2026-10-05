@@ -10,7 +10,7 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, Vcl.Controls,
-  Winapi.WebView2;
+  Winapi.WebView2, ClaudeCode.Compat;
 
 type
   TWebViewMessageEvent = procedure(Sender: TObject; const Msg: string) of object;

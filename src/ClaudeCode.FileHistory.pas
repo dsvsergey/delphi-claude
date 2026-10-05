@@ -7,7 +7,7 @@ unit ClaudeCode.FileHistory;
 interface
 
 uses
-  System.SysUtils, System.JSON, ClaudeCode.Mcp;
+  System.SysUtils, System.JSON, ClaudeCode.Mcp, ClaudeCode.Compat;
 
 type
   THistoryEntry = record

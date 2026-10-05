@@ -25,7 +25,7 @@ package ClaudeCodeIDE;
 {$DEFINE RELEASE}
 {$ENDIF IMPLICITBUILDING}
 {$DESCRIPTION 'Claude Code IDE Integration'}
-{$LIBSUFFIX AUTO}
+{$IFDEF VER300}{$LIBSUFFIX '230'}{$ELSE}{$LIBSUFFIX AUTO}{$ENDIF}
 {$DESIGNONLY}
 {$IMPLICITBUILD OFF}
 
@@ -38,6 +38,8 @@ requires
   IndyCore;
 
 contains
+  ClaudeCode.Compat in 'src\ClaudeCode.Compat.pas',
+  ClaudeCode.CompatIde in 'src\ClaudeCode.CompatIde.pas',
   ClaudeCode.Utils in 'src\ClaudeCode.Utils.pas',
   ClaudeCode.Process in 'src\ClaudeCode.Process.pas',
   ClaudeCode.PascalIndex in 'src\ClaudeCode.PascalIndex.pas',
