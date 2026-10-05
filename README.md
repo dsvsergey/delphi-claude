@@ -1,4 +1,4 @@
-# Claude Code for Delphi (RAD Studio 13)
+# Claude Code for Delphi (RAD Studio 13 and Delphi 10 Seattle)
 
 **English** | [Українська](README.uk.md)
 
@@ -107,7 +107,7 @@ Terminal colors follow the light or dark IDE theme; the font is taken from the c
 
 ## Build and install
 
-Requirements: RAD Studio / Delphi 13 (BDS 37.0) and the Claude Code CLI installed (`claude` on PATH).
+Requirements: RAD Studio / Delphi 13 (BDS 37.0) or Delphi 10 Seattle (BDS 17.0, see below) and the Claude Code CLI installed (`claude` on PATH).
 
 ```bat
 build.bat
@@ -122,6 +122,31 @@ Or manually: *Component → Install Packages… → Add…* and pick the BPL mat
 Uninstall: `install.ps1 -Uninstall`.
 
 `build.bat` finds Delphi via the registry (`RootDir` of `BDS\37.0`); to override: `build.bat "C:\path\to\Studio\37.0"`. In PowerShell run it as `.\build.bat`.
+
+### Delphi 10 Seattle
+
+```bat
+build-seattle.bat
+powershell -ExecutionPolicy Bypass -File install.ps1 -BdsVersion 17.0
+```
+Output: `bin\Seattle\ClaudeCodeIDE230.bpl` (Seattle has a 32-bit IDE only). Seattle has no `Winapi.WebView2` and
+`Winapi.UIAutomation`, so `build-seattle.bat` compiles them from the sources of a newer Delphi (10.4 or later, Delphi 13
+by default): `build-seattle.bat "C:\path\to\Studio\17.0" "C:\path\to\Studio\37.0"`.
+
+![Delphi 10 Seattle with the Claude Code panel docked as a tab next to the Structure view](docs/images/seattle-panel.png)
+
+![Tools → Claude Code menu in Delphi 10 Seattle](docs/images/seattle-menu.png)
+
+![Diff window in Delphi 10 Seattle: Claude's fix of TOrder.CalcTotal and a new method](docs/images/seattle-diff-window.png)
+
+What Seattle's IDE lacks, and so the package does without there:
+- proposed changes are always shown in the diff window: reviewing them in the code editor needs the editor API of Delphi 11;
+- the code editor's popup menu gets no Claude items (the Project Manager and Messages menus do);
+- no DelphiLSP (Delphi 10.4 and later): `findReferences` and `renameSymbol` work on the text of the sources, without
+  telling apart symbols of the same name, and say so in their answer;
+- the package's windows keep the regular VCL look instead of the IDE theme;
+- `getDiagnostics` reports every Error Insight message as an error, and Error Insight parses each file synchronously
+  (a second or two per file in a large project), so for all open files it stops after 10 seconds, the active file first.
 
 Debugging in the 64-bit IDE (it debugs through lldb):
 - breakpoints and logpoints need *Project Options → Building → Delphi Compiler → Linking → Include debug information in the executable* (`DCC_DebugInfoInExe`); `debugControl` warns when it is off;

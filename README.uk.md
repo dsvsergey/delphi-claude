@@ -1,4 +1,4 @@
-# Claude Code для Delphi (RAD Studio 13)
+# Claude Code для Delphi (RAD Studio 13 і Delphi 10 Seattle)
 
 [English](README.md) | **Українська**
 
@@ -107,7 +107,7 @@ Claude Code використовує IDE-з'єднання сам і з ньог
 
 ## Збірка та встановлення
 
-Потрібно: RAD Studio / Delphi 13 (BDS 37.0) і встановлений Claude Code CLI (`claude` у PATH).
+Потрібно: RAD Studio / Delphi 13 (BDS 37.0) або Delphi 10 Seattle (BDS 17.0, див. нижче) і встановлений Claude Code CLI (`claude` у PATH).
 
 ```bat
 build.bat
@@ -122,6 +122,32 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 Видалення: `install.ps1 -Uninstall`.
 
 `build.bat` сам знаходить Delphi через реєстр (`RootDir` у `BDS\37.0`); інший шлях: `build.bat "C:\шлях\до\Studio\37.0"`. У PowerShell запускайте як `.\build.bat`.
+
+### Delphi 10 Seattle
+
+```bat
+build-seattle.bat
+powershell -ExecutionPolicy Bypass -File install.ps1 -BdsVersion 17.0
+```
+Результат: `bin\Seattle\ClaudeCodeIDE230.bpl` (у Seattle лише 32-бітна IDE). У Seattle немає `Winapi.WebView2` і
+`Winapi.UIAutomation`, тому `build-seattle.bat` компілює їх із вихідних кодів новішої Delphi (10.4 або новішої, типово
+Delphi 13): `build-seattle.bat "C:\шлях\до\Studio\17.0" "C:\шлях\до\Studio\37.0"`.
+
+![Delphi 10 Seattle з панеллю Claude Code, пристикованою вкладкою поряд зі Structure](docs/images/seattle-panel.png)
+
+![Меню Tools → Claude Code у Delphi 10 Seattle](docs/images/seattle-menu.png)
+
+![Вікно diff у Delphi 10 Seattle: виправлення TOrder.CalcTotal від Claude і новий метод](docs/images/seattle-diff-window.png)
+
+Чого немає в IDE Seattle і без чого там обходиться пакет:
+- запропоновані зміни завжди показуються у вікні diff: рев'ю прямо в редакторі коду потребує API редактора Delphi 11;
+- у контекстному меню редактора коду немає пунктів Claude (у меню Project Manager і Messages вони є);
+- немає DelphiLSP (з'явився в Delphi 10.4): `findReferences` і `renameSymbol` працюють із текстом вихідних кодів, не
+  розрізняючи однойменні символи, і пишуть про це у відповіді;
+- вікна пакета мають звичайний вигляд VCL замість теми IDE;
+- `getDiagnostics` позначає всі повідомлення Error Insight як помилки, а Error Insight розбирає кожен файл синхронно
+  (секунду-дві на файл у великому проєкті), тому для всіх відкритих файлів перевірка зупиняється через 10 секунд,
+  першим перевіряється активний файл.
 
 ## Використання
 
@@ -316,6 +342,14 @@ node tests/e2e-test.mjs <port> <token> <тека відкритої копії t
 Розділи (через кому, за замовчуванням усі): `code`, `tests`, `forms`, `debug`, `app`, `project`, `db`, `modernize`,
 `inline`, `timeline`, `prompts`. Відкривайте копію `tests/e2e`, а не саму теку: тест змінює, відновлює й видаляє там
 файли, запускає програму й натискає кнопки у вікнах IDE (Project Map, Claude Timeline, підтвердження).
+
+Навантажувальний тест інструментів читання запускається на будь-якому великому проєкті, відкритому в такому екземплярі:
+структура кожного юніта, посилання й аналіз модернізації по всьому проєкту, збірка, 30 відкритих редакторів, 40
+паралельних запитів і повторні раунди зі стеженням за пам'яттю та дескрипторами IDE:
+
+```bat
+node tests/stress-test.mjs <port> <token> <PID bds.exe> [скільки юнітів розібрати, типово 300]
+```
 
 ## Обмеження
 
